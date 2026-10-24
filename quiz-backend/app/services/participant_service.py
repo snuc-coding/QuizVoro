@@ -5,6 +5,8 @@ participant_service.py — Games, joining and rejoining (Developer 2).
   join_game          a player joins with PIN + nickname -> secret rejoin token
   rejoin_game        a player whose phone dropped comes back with PIN + token
   get_participant_by_token   used by the X-Participant-Token dependency
+  get_game_for_admin / get_player_game   load a game and check who is asking
+  active_players / standing               the players who count for scoring and ranking
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app import scoring
 from app.models import Admin, Game, GameParticipant, Participant
 from app.nicknames import NicknameRejected, check_nickname, nickname_key
 from app.services.quiz_service import get_quiz_and_verify_ownership
@@ -54,6 +57,13 @@ def get_game_by_id(db: Session, game_id: int) -> Game:
     game = db.get(Game, game_id)
     if game is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Game with ID {game_id} was not found.")
+    return game
+
+
+def get_game_for_admin(db: Session, game_id: int, admin: Admin) -> Game:
+    """The game, if the admin owns the quiz it runs (404 / 403 otherwise)."""
+    game = get_game_by_id(db, game_id)
+    get_quiz_and_verify_ownership(db, game.quiz_id, admin)
     return game
 
 
@@ -118,6 +128,14 @@ def get_participant_by_token(db: Session, token: str) -> GameParticipant:
     return membership
 
 
+def get_player_game(db: Session, game_id: int, membership: GameParticipant) -> Game:
+    """The game a player is calling about; their token must belong to it."""
+    game = get_game_by_id(db, game_id)
+    if membership.game_id != game.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not in this game.")
+    return game
+
+
 def rejoin_game(db: Session, pin: str, token: str) -> GameParticipant:
     """Return the existing player for this PIN + token (same id, score and streak)."""
     game = get_game_by_pin(db, pin)
@@ -125,3 +143,23 @@ def rejoin_game(db: Session, pin: str, token: str) -> GameParticipant:
     if membership.game_id != game.id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your session has expired. Join the game again.")
     return membership
+
+
+def active_players(db: Session, game_id: int) -> list[GameParticipant]:
+    """Players still in the game. Removed players are never scored or ranked."""
+    return (
+        db.query(GameParticipant)
+        .filter(GameParticipant.game_id == game_id, GameParticipant.is_active.is_(True))
+        .all()
+    )
+
+
+def standing(membership: GameParticipant) -> scoring.Standing:
+    """A player's overall standing, as the ranking rules need it."""
+    return scoring.Standing(
+        participant_id=membership.id,
+        score=membership.total_score,
+        correct_count=membership.correct_count,
+        correct_time_ms=membership.correct_time_ms,
+        joined_at=membership.joined_at,
+    )
