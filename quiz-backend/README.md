@@ -1,4 +1,4 @@
-# Cognizant Quiz Club — Live Quiz Application Backend
+# Cognition Quiz Club — Live Quiz Application Backend
 
 ## Developer 1: Authentication and Quiz Management Implementation
 
