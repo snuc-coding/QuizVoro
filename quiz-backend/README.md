@@ -1,8 +1,8 @@
-# Cognizant Quiz Club — Live Quiz Application Backend
+# QuizVoro — Live Quiz Application Backend
 
 ## Developer 1: Authentication and Quiz Management Implementation
 
-This repository contains the backend implementation for **Developer 1 — Authentication and Quiz Management** of the Cognizant Quiz Club live quiz application (a Kahoot-like multiplayer quiz platform).
+This repository contains the backend implementation for **Developer 1 — Authentication and Quiz Management** of the QuizVoro live quiz application (a Kahoot-like multiplayer quiz platform).
 
 ---
 
@@ -37,7 +37,7 @@ This repository contains the backend implementation for **Developer 1 — Authen
 
 ## 1. Project Overview
 
-The **Cognizant Quiz Club Live Quiz Application** is a real-time, interactive, Kahoot-like trivia platform engineered to support hundreds of concurrent participants across multiple rounds and media-rich multiple-choice questions (MCQs).
+The **QuizVoro Live Quiz Application** is a real-time, interactive, Kahoot-like trivia platform engineered to support hundreds of concurrent participants across multiple rounds and media-rich multiple-choice questions (MCQs).
 
 The backend team responsibilities are partitioned as follows:
 - **Developer 1 (This implementation)**: Administrator authentication, role-based authorization, quiz creation/management, round creation/management, question and option creation, multimedia attachments, and core database schema foundation.
@@ -269,11 +269,11 @@ python create_admin.py
 Prompts:
 ```text
 ==================================================
-  Cognizant Quiz Club — Create Admin Account
+  QuizVoro — Create Admin Account
 ==================================================
 
 Enter admin username: admin
-Enter admin email: admin@cognizant.com
+Enter admin email: admin@quizvoro.com
 Enter password (min 8 characters): ********
 Confirm password: ********
 
@@ -281,7 +281,7 @@ Hashing password with Argon2 (this may take a moment)...
 
 ✓ Admin created successfully! ID: 1
   Username: admin
-  Email:    admin@cognizant.com
+  Email:    admin@quizvoro.com
 
 You can now log in via: POST /api/v1/admin/login
 ```
@@ -422,7 +422,7 @@ $headers = @{
 }
 
 $quizBody = @{
-    title = "Cognizant Annual Tech Challenge 2026"
+    title = "QuizVoro Annual Tech Challenge 2026"
     description = "Grand finale live quiz covering Python, Cloud, and AI"
 } | ConvertTo-Json
 

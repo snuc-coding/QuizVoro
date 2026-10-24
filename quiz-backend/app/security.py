@@ -14,7 +14,7 @@ Database lookups happen in auth_service.py or the auth dependency.
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from jose import JWTError, jwt
+import jwt
 from passlib.context import CryptContext
 
 from app.config import get_settings

@@ -184,6 +184,31 @@ def delete_question(
 # Media upload and serving
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _validate_magic_bytes(header: bytes, extension: str) -> bool:
+    """Validate file content against magic byte signatures for security."""
+    if len(header) < 4:
+        return False
+    if extension == ".png":
+        return header.startswith(b"\x89PNG\r\n\x1a\n")
+    if extension in (".jpg", ".jpeg"):
+        return header.startswith(b"\xff\xd8\xff")
+    if extension == ".gif":
+        return header.startswith(b"GIF87a") or header.startswith(b"GIF89a")
+    if extension == ".webp":
+        return header.startswith(b"RIFF") and len(header) >= 12 and header[8:12] == b"WEBP"
+    if extension == ".mp3":
+        return header.startswith(b"ID3") or header.startswith(b"\xff\xfb") or header.startswith(b"\xff\xf3") or header.startswith(b"\xff\xf2")
+    if extension == ".wav":
+        return header.startswith(b"RIFF") and len(header) >= 12 and header[8:12] == b"WAVE"
+    if extension == ".ogg":
+        return header.startswith(b"OggS")
+    if extension == ".mp4":
+        return len(header) >= 8 and (header[4:8] == b"ftyp" or header.startswith(b"\x00\x00\x00"))
+    if extension == ".webm":
+        return header.startswith(b"\x1a\x45\xdf\xa3")
+    return True
+
+
 @media_router.post(
     "/{questionId}/media",
     response_model=MediaUploadOut,
@@ -191,13 +216,11 @@ def delete_question(
     summary="Upload Question Media",
     description=(
         "Upload an image, audio, or video file for a question. "
-        "Supported formats: JPEG, PNG, GIF, WebP, MP3, WAV, OGG, MP4, WebM. "
-        "Maximum file size is configurable via MAX_UPLOAD_SIZE_MB in .env (default: 10 MB). "
-        "The file is stored on the local filesystem and a URL reference is saved in the database."
+        "Streamed in chunks with strict size, MIME-type, and magic-byte checks."
     ),
     responses={
         201: {"description": "Media uploaded and linked to question."},
-        400: {"description": "Unsupported file type or file too large."},
+        400: {"description": "Unsupported file type, corrupted file, or file too large."},
         403: {"description": "Not the quiz owner."},
         404: {"description": "Question not found."},
     },
@@ -224,34 +247,64 @@ async def upload_media(
 
     media_category, extension = ALLOWED_MIME_TYPES[content_type]
 
-    # ── Read and validate size ────────────────────────────────────────────────
-    content = await file.read()
-    max_bytes = settings.max_upload_size_bytes
-    if len(content) > max_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"File is too large ({len(content) / 1024 / 1024:.1f} MB). "
-                f"Maximum allowed size is {settings.MAX_UPLOAD_SIZE_MB} MB."
-            ),
-        )
-
-    # ── Generate a safe random filename ──────────────────────────────────────
-    # Using uuid4 prevents path traversal and filename collisions.
+    # ── Prepare safe storage path ─────────────────────────────────────────────
     safe_filename = f"{uuid.uuid4().hex}{extension}"
-    media_dir = Path(settings.MEDIA_DIR)
+    media_dir = Path(settings.MEDIA_DIR).resolve()
     media_dir.mkdir(parents=True, exist_ok=True)
     file_path = media_dir / safe_filename
 
-    # ── Write to disk ─────────────────────────────────────────────────────────
-    file_path.write_bytes(content)
+    # ── Stream upload in chunks with size and magic-byte check ─────────────────
+    max_bytes = settings.max_upload_size_bytes
+    accumulated_bytes = 0
+    first_chunk = True
 
-    # ── Save reference in DB ──────────────────────────────────────────────────
-    # Store a relative URL, not the absolute filesystem path.
-    media_url = f"/media/{safe_filename}"
-    updated_question = question_service.attach_media_to_question(
-        db, question, media_url, media_category
-    )
+    try:
+        with open(file_path, "wb") as buffer:
+            while chunk := await file.read(64 * 1024):
+                accumulated_bytes += len(chunk)
+                if accumulated_bytes > max_bytes:
+                    buffer.close()
+                    file_path.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            f"File is too large. Maximum allowed size is "
+                            f"{settings.MAX_UPLOAD_SIZE_MB} MB."
+                        ),
+                    )
+
+                if first_chunk:
+                    if not _validate_magic_bytes(chunk[:32], extension):
+                        buffer.close()
+                        file_path.unlink(missing_ok=True)
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="File content does not match the declared MIME type signature.",
+                        )
+                    first_chunk = False
+
+                buffer.write(chunk)
+
+        if accumulated_bytes == 0:
+            file_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Uploaded file is empty.",
+            )
+
+        # ── Save reference in DB ──────────────────────────────────────────────
+        media_url = f"/media/{safe_filename}"
+        updated_question = question_service.attach_media_to_question(
+            db, question, media_url, media_category
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        file_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process media upload: {str(e)}",
+        )
 
     return MediaUploadOut(
         question_id=updated_question.id,
@@ -263,7 +316,10 @@ async def upload_media(
 @media_router.get(
     "/{questionId}/media",
     summary="Serve Question Media",
-    description="Download the media file attached to a question.",
+    description=(
+        "Stream/download the media file attached to a question. "
+        "Publicly accessible to allow participants and the stage display to load media."
+    ),
     responses={
         200: {"description": "Media file returned."},
         404: {"description": "No media attached to this question, or question not found."},
@@ -271,11 +327,10 @@ async def upload_media(
 )
 def serve_media(
     questionId: int,
-    admin: Admin = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> FileResponse:
     """GET /api/v1/questions/{questionId}/media"""
-    question = question_service.get_question_and_verify_ownership(db, questionId, admin)
+    question = question_service.get_question_by_id(db, questionId)
 
     if not question.media_url:
         raise HTTPException(
@@ -283,9 +338,9 @@ def serve_media(
             detail="No media file is attached to this question.",
         )
 
-    # Strip the leading slash from "/media/filename.jpg" → "media/filename.jpg"
-    relative_path = question.media_url.lstrip("/")
-    file_path = Path(relative_path)
+    safe_filename = Path(question.media_url).name
+    media_dir = Path(settings.MEDIA_DIR).resolve()
+    file_path = media_dir / safe_filename
 
     if not file_path.exists():
         raise HTTPException(

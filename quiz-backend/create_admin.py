@@ -31,7 +31,7 @@ from app.services.auth_service import create_admin
 
 def main() -> None:
     print("=" * 50)
-    print("  Cognizant Quiz Club — Create Admin Account")
+    print("  QuizVoro — Create Admin Account")
     print("=" * 50)
     print()
 

@@ -102,8 +102,8 @@ class TestMediaUpload:
         round_id = _create_round(client, auth_headers, quiz_id)
         question_id = _create_question(client, auth_headers, round_id)
 
-        # Create a fake 11 MB "PNG" (just random bytes with PNG content-type)
-        big_file = b"\x89PNG" + b"\x00" * (11 * 1024 * 1024)
+        # Create a fake 11 MB "PNG" with valid PNG signature
+        big_file = b"\x89PNG\r\n\x1a\n" + b"\x00" * (11 * 1024 * 1024)
 
         response = client.post(
             f"/api/v1/questions/{question_id}/media",
@@ -129,3 +129,47 @@ class TestMediaUpload:
             files={"file": ("test.png", io.BytesIO(TINY_PNG), "image/png")},
         )
         assert response.status_code == 403
+
+    def test_serve_media_success(self, client: TestClient, auth_headers):
+        """GET /api/v1/questions/{questionId}/media returns the uploaded file."""
+        quiz_id = _create_quiz(client, auth_headers)
+        round_id = _create_round(client, auth_headers, quiz_id)
+        question_id = _create_question(client, auth_headers, round_id)
+
+        # Upload
+        up_res = client.post(
+            f"/api/v1/questions/{question_id}/media",
+            files={"file": ("test.png", io.BytesIO(TINY_PNG), "image/png")},
+            headers=auth_headers,
+        )
+        assert up_res.status_code == 201
+
+        # Serve
+        get_res = client.get(f"/api/v1/questions/{question_id}/media")
+        assert get_res.status_code == 200
+        assert get_res.content == TINY_PNG
+        assert "image/png" in get_res.headers["content-type"]
+
+    def test_serve_media_not_found(self, client: TestClient, auth_headers):
+        """GET /api/v1/questions/{questionId}/media when no media exists returns 404."""
+        quiz_id = _create_quiz(client, auth_headers)
+        round_id = _create_round(client, auth_headers, quiz_id)
+        question_id = _create_question(client, auth_headers, round_id)
+
+        get_res = client.get(f"/api/v1/questions/{question_id}/media")
+        assert get_res.status_code == 404
+
+    def test_invalid_magic_bytes_returns_400(self, client: TestClient, auth_headers):
+        """File claiming to be image/png but containing text/plain content is rejected."""
+        quiz_id = _create_quiz(client, auth_headers)
+        round_id = _create_round(client, auth_headers, quiz_id)
+        question_id = _create_question(client, auth_headers, round_id)
+
+        fake_png = b"THIS IS NOT A REAL PNG FILE AT ALL"
+        response = client.post(
+            f"/api/v1/questions/{question_id}/media",
+            files={"file": ("fake.png", io.BytesIO(fake_png), "image/png")},
+            headers=auth_headers,
+        )
+        assert response.status_code == 400
+        assert "signature" in response.json()["detail"].lower()

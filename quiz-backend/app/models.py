@@ -100,7 +100,7 @@ class Quiz(Base):
     rounds = relationship("Round", back_populates="quiz", cascade="all, delete-orphan", order_by="Round.round_number")
 
     # Games that use this quiz template (Dev 3 will populate this side)
-    games = relationship("Game", back_populates="quiz")
+    games = relationship("Game", back_populates="quiz", passive_deletes=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -189,7 +189,7 @@ class Question(Base):
     options = relationship("Option", back_populates="question", cascade="all, delete-orphan")
 
     # Answers reference this question (Dev 2 creates the answers table).
-    answers = relationship("Answer", back_populates="question")
+    answers = relationship("Answer", back_populates="question", cascade="all, delete-orphan", passive_deletes=True)
 
     # Prevent two questions with the same order number in the same round.
     __table_args__ = (
@@ -230,7 +230,7 @@ class Option(Base):
     question = relationship("Question", back_populates="options")
 
     # Answers reference which option was chosen (Dev 2).
-    answers = relationship("Answer", back_populates="chosen_option")
+    answers = relationship("Answer", back_populates="chosen_option", passive_deletes=True)
 
     __table_args__ = (
         Index("ix_options_question_id", "question_id"),

@@ -15,7 +15,7 @@ Usage example:
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError
+import jwt
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -61,7 +61,7 @@ def get_current_admin(
         if admin_id_str is None:
             raise _CREDENTIALS_EXCEPTION
         admin_id = int(admin_id_str)
-    except (JWTError, ValueError):
+    except (jwt.PyJWTError, ValueError):
         raise _CREDENTIALS_EXCEPTION
 
     admin = db.get(Admin, admin_id)

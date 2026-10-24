@@ -16,7 +16,7 @@ IMPORTANT — Answer security:
 from __future__ import annotations
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, Field, EmailStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, EmailStr, model_validator
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -34,6 +34,8 @@ class OrmBase(BaseModel):
 
 class AdminLoginRequest(BaseModel):
     """Request body for POST /api/v1/admin/login"""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     username: str = Field(
         ...,
         min_length=1,
@@ -44,6 +46,7 @@ class AdminLoginRequest(BaseModel):
     password: str = Field(
         ...,
         min_length=1,
+        max_length=128,
         description="Administrator password",
         examples=["supersecret"],
     )
@@ -72,6 +75,8 @@ class AdminOut(OrmBase):
 
 class OptionIn(BaseModel):
     """One MCQ answer option sent when creating a question."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     option_text: str = Field(
         ...,
         min_length=1,
@@ -115,6 +120,8 @@ ALLOWED_MEDIA_TYPES = Literal["image", "audio", "video"]
 
 class QuestionIn(BaseModel):
     """Request body for POST /api/v1/rounds/{roundId}/questions"""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     question_text: str = Field(
         ...,
         min_length=1,
@@ -205,6 +212,8 @@ class ParticipantQuestionOut(OrmBase):
 
 class QuestionUpdate(BaseModel):
     """Optional fields for PATCH /api/v1/questions/{questionId}"""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     question_text: str | None = Field(None, min_length=1, max_length=2000)
     time_limit: int | None = Field(None, ge=5, le=300)
     points: int | None = Field(None, ge=0, le=10000)
@@ -217,6 +226,8 @@ class QuestionUpdate(BaseModel):
 
 class RoundIn(BaseModel):
     """Request body for POST /api/v1/quizzes/{quizId}/rounds"""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     title: str = Field(..., min_length=1, max_length=255, description="Round title")
     description: str | None = Field(None, max_length=1000, description="Optional description")
     round_number: int = Field(..., ge=1, description="Round sequence number (must be unique within the quiz)")
@@ -235,8 +246,10 @@ class RoundOut(OrmBase):
 
 class RoundUpdate(BaseModel):
     """Optional fields for PATCH /api/v1/rounds/{roundId}"""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     title: str | None = Field(None, min_length=1, max_length=255)
-    description: str | None = None
+    description: str | None = Field(None, max_length=1000)
     round_number: int | None = Field(None, ge=1)
 
 
@@ -246,6 +259,8 @@ class RoundUpdate(BaseModel):
 
 class QuizIn(BaseModel):
     """Request body for POST /api/v1/quizzes"""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     title: str = Field(..., min_length=1, max_length=255, description="Quiz title")
     description: str | None = Field(None, max_length=2000, description="Optional description")
 
@@ -274,8 +289,10 @@ class QuizSummaryOut(OrmBase):
 
 class QuizUpdate(BaseModel):
     """Optional fields for PATCH /api/v1/quizzes/{quizId}"""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     title: str | None = Field(None, min_length=1, max_length=255)
-    description: str | None = None
+    description: str | None = Field(None, max_length=2000)
     is_published: bool | None = None
 
 

@@ -79,7 +79,7 @@ def get_quiz(
     db: Session = Depends(get_db),
 ) -> QuizOut:
     """GET /api/v1/quizzes/{quizId}"""
-    return quiz_service.get_quiz_and_verify_ownership(db, quizId, admin)
+    return quiz_service.get_quiz_detail_and_verify_ownership(db, quizId, admin)
 
 
 @router.patch(

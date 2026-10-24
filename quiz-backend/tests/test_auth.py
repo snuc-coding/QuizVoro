@@ -59,6 +59,37 @@ class TestAdminLogin:
         )
         assert response.status_code == 422
 
+    def test_oversized_password_returns_422(self, client: TestClient):
+        """Password longer than 128 chars is rejected to protect Argon2."""
+        long_pass = "A" * 150
+        response = client.post(
+            "/api/v1/admin/login",
+            json={"username": "testadmin", "password": long_pass},
+        )
+        assert response.status_code == 422
+
+    def test_rate_limiting_after_repeated_failures(self, client: TestClient):
+        """After 5 failed login attempts from same IP, 6th attempt returns 429."""
+        from app.routers.auth import _reset_attempts
+        _reset_attempts("testclient")
+
+        for _ in range(5):
+            res = client.post(
+                "/api/v1/admin/login",
+                json={"username": "attacker", "password": "wrongpassword"},
+            )
+            assert res.status_code == 401
+
+        # 6th attempt should trigger 429 Too Many Requests
+        rate_limited_res = client.post(
+            "/api/v1/admin/login",
+            json={"username": "attacker", "password": "wrongpassword"},
+        )
+        assert rate_limited_res.status_code == 429
+        assert "too many" in rate_limited_res.json()["detail"].lower()
+
+        _reset_attempts("testclient")
+
     def test_missing_password_returns_422(self, client: TestClient):
         """Missing password → 422."""
         response = client.post(
