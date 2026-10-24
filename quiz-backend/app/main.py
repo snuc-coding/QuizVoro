@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import auth, quizzes, rounds, questions
+from app.routers import auth, quizzes, rounds, questions, games
 
 settings = get_settings()
 
@@ -67,6 +67,9 @@ app.include_router(rounds.round_router, prefix=API_PREFIX)
 app.include_router(questions.round_router, prefix=API_PREFIX)
 app.include_router(questions.question_router, prefix=API_PREFIX)
 app.include_router(questions.media_router, prefix=API_PREFIX)
+
+# Live games (Developer 2): /api/v1/games/...
+app.include_router(games.router, prefix=API_PREFIX)
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
