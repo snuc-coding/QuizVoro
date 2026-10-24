@@ -278,6 +278,11 @@ class Game(Base):
         nullable=True,
     )
 
+    # When answers opened for the current question (Dev 3 sets this; Dev 2's
+    # answer timing and scoring read it). On resume after a pause, Dev 3 shifts it
+    # forward by the paused duration so paused time never counts against players.
+    current_question_started_at = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),
@@ -324,6 +329,24 @@ class GameParticipant(Base):
 
     joined_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    # ── Dev 2: joining and rejoining ─────────────────────────────────────────
+    # Secret the player's phone keeps (localStorage) to rejoin after a dropped
+    # connection. Sent back as the X-Participant-Token header.
+    token = Column(String(64), unique=True, nullable=True, index=True)
+    # Nickname folded to lower case, so "Rathi" and "RATHI" can't both join a game.
+    nickname_key = Column(String(50), nullable=True)
+    # False once the host removes the player (Dev 3 sets this).
+    is_active = Column(Boolean, default=True, server_default="1", nullable=False)
+
+    # ── Dev 2: scoring state, updated once per question when it is scored ────
+    correct_count = Column(Integer, default=0, server_default="0", nullable=False)
+    # Sum of response times on CORRECT answers only (tie-break 3).
+    correct_time_ms = Column(Integer, default=0, server_default="0", nullable=False)
+    current_streak = Column(Integer, default=0, server_default="0", nullable=False)
+    best_streak = Column(Integer, default=0, server_default="0", nullable=False)
+    rank = Column(Integer, nullable=True)            # None until the first question is scored
+    previous_rank = Column(Integer, nullable=True)   # rank before the latest scoring
+
     game = relationship("Game", back_populates="game_participants")
     participant = relationship("Participant", back_populates="game_participants")
     answers = relationship("Answer", back_populates="game_participant")
@@ -331,6 +354,7 @@ class GameParticipant(Base):
     # A participant can only join a given game once.
     __table_args__ = (
         UniqueConstraint("game_id", "participant_id", name="uq_game_participants_game_participant"),
+        UniqueConstraint("game_id", "nickname_key", name="uq_game_participants_game_nickname"),
     )
 
 
@@ -367,4 +391,30 @@ class Answer(Base):
             "game_id", "game_participant_id", "question_id",
             name="uq_answers_one_per_participant_per_question",
         ),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCORED QUESTIONS
+# Dev 2 owns this table.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ScoredQuestion(Base):
+    """
+    Records that a question has been scored in a game.
+
+    Scoring adds points to every player's total, so it must happen exactly once.
+    The unique (game_id, question_id) pair is the final guard: if two "reveal"
+    requests race, only one can insert this row; the other sees the conflict and
+    returns the existing result instead of scoring twice.
+    """
+    __tablename__ = "scored_questions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    game_id = Column(Integer, ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    question_id = Column(Integer, ForeignKey("questions.id", ondelete="CASCADE"), nullable=False)
+    scored_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "question_id", name="uq_scored_questions_game_question"),
     )

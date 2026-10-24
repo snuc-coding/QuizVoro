@@ -1,0 +1,29 @@
+# Nicknames that won't be accepted. Names appear on the projector, so keep this list current.
+#
+#   word    blocks the name when it appears as a separate word, after undoing letter swaps
+#           ("Big Dick", "BigDick", "b1tch" are all caught; "Dickson" is not).
+#   *word   blocks it anywhere inside the name, even glued to other letters.
+#           Only for words that never occur inside real names: "*ass" would block Hassan and Bassam.
+#
+# Add the Tamil and Hindi slang the club expects to see, written in English letters.
+# The host can also kick any player from the lobby.
+
+*fuck
+shit
+bitch
+bastard
+asshole
+dick
+cock
+pussy
+cunt
+whore
+slut
+porn
+nude
+penis
+vagina
+boobs
+rape
+nazi
+hitler
