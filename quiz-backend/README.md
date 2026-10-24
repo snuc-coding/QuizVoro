@@ -32,6 +32,7 @@ This repository contains the backend implementation for **Developer 1 — Authen
 22. [Testing Commands](#22-testing-commands)
 23. [Troubleshooting Guide](#23-troubleshooting-guide)
 24. [Integration with Developer 2 & Developer 3](#24-integration-with-developer-2--developer-3)
+25. [Developer 2: Participants and Scoring](#25-developer-2-participants-and-scoring)
 
 ---
 
@@ -580,3 +581,54 @@ To prevent cheating:
 - `ParticipantQuestionOut` includes `id`, `question_text`, `question_type`, `time_limit`, `points`, `media_url`, and `options` (`id`, `option_text`).
 - `ParticipantQuestionOut` **never includes** `is_correct`.
 - **Developer 2 and 3**: When sending questions to participants or broadcasting real-time quiz updates before the answer reveal, serialize questions using `ParticipantQuestionOut`.
+
+---
+
+## 25. Developer 2: Participants and Scoring
+
+Players join with the PIN and a nickname, answer the open question, and are scored once per question at the reveal.
+
+- Routes: `app/routers/games.py`
+- Services: `app/services/participant_service.py` (games, join, rejoin), `answer_service.py` (current question, answers, scoring), `leaderboard_service.py`
+- Rules: `app/scoring.py` (pure functions), nickname filter in `app/nicknames.py` + `app/blocked_words.txt`
+- Migration `6271d3a819b1` adds the new columns and the `scored_questions` table: run `alembic upgrade head`.
+
+### Endpoints (`/api/v1/games`)
+| Method | Endpoint | Who | Description | Status |
+|---|---|---|---|---|
+| `POST` | `/api/v1/games` | Admin | Create a game for your quiz; returns the 6-digit `pin` | `201 Created` |
+| `POST` | `/api/v1/games/join` | Player | `{pin, nickname}` → `token` (the phone keeps it in localStorage) | `201 Created` |
+| `POST` | `/api/v1/games/rejoin` | Player | `{pin, token}` → the same player, score and streak | `200 OK` |
+| `GET` | `/api/v1/games/{gameId}/questions/current` | Player | Open question without `is_correct`, plus `opened_at`, `deadline`, `server_time`, `already_answered` | `200 OK` |
+| `POST` | `/api/v1/games/{gameId}/answers` | Player | `{question_id, option_id}`; the reply never says whether it is right | `201 Created` |
+| `POST` | `/api/v1/games/{gameId}/questions/{questionId}/score` | Admin (quiz owner) | Score the open question. Repeat calls change nothing and return the same result with `already_scored: true` | `200 OK` |
+| `GET` | `/api/v1/games/{gameId}/leaderboard` | Anyone | `?limit=10`, `?round_id=` for one round; includes `rank_delta`, `climbers`, `close_battles` | `200 OK` |
+| `GET` | `/api/v1/games/{gameId}/me` | Player | Score, rank, streak and `last_result` for the latest scored question | `200 OK` |
+
+Player endpoints need the header `X-Participant-Token: <token>`: missing or unknown → `401`, removed or another game's token → `403`. Rejected answers return `409` with a message to show (paused, not open, late, already answered, closed); an option from another question returns `422`.
+
+**Scoring:** a correct answer earns `round(points × (1 − 0.5 × time / time_limit))`, timed on the server from `current_question_started_at`. Wrong or no answer earns 0. Answers up to 300 ms after the deadline score half; later ones are rejected. Ties are broken by more correct answers, then less total time on correct answers, then earlier join.
+
+### For Developer 3
+Game control sets these columns on `games`; Developer 2 code only reads them.
+
+- **Open a question:** `status = "active"`, `current_question_id = question.id`, `current_question_started_at = datetime.now(timezone.utc)`. A time in the future gives a "get ready" countdown; answers are refused until then.
+- **Pause:** `status = "paused"` and remember when (`paused_at`). Answers are refused while paused.
+- **Resume:** `current_question_started_at += now - paused_at`, then `status = "active"`. Shifting the start forward means paused time never counts against anyone's time or points.
+- **Reveal:** call the service directly (works from a timer, no admin needed):
+  ```python
+  from app.services import answer_service, leaderboard_service, participant_service
+
+  game = participant_service.get_game_by_id(db, game_id)
+  result = answer_service.score_question(db, game, question_id)  # safe to call twice
+  board = leaderboard_service.get_leaderboard(db, game, limit=10)
+  ```
+  Broadcast `result` (correct option, answer distribution) and `board`, then open the next question. Only the open question can be scored, and answers to it are refused once it is scored, so an early reveal is fine.
+- **Remove a player:** set `GameParticipant.is_active = False`. They can no longer answer or rejoin, and are left out of scoring and leaderboards.
+- **WebSockets:** authenticate a player with `participant_service.get_participant_by_token(db, token)`, and send questions only as `ParticipantQuestionOut`.
+
+### Tests
+```powershell
+pytest tests/test_scoring.py tests/test_games.py -v
+```
+The full suite (`pytest tests/ -v`) is 185 tests: Developer 1's 54 plus 131 for Developer 2.
