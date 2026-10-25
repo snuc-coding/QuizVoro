@@ -16,7 +16,7 @@ import secrets
 
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app import scoring
 from app.models import Admin, Game, GameParticipant, Participant, Question, Round
@@ -138,7 +138,12 @@ def join_game(db: Session, pin: str, raw_nickname: str) -> GameParticipant:
 
 
 def get_participant_by_token(db: Session, token: str) -> GameParticipant:
-    membership = db.query(GameParticipant).filter(GameParticipant.token == token).first() if token else None
+    membership = (
+        db.query(GameParticipant)
+        .options(selectinload(GameParticipant.participant))  # nickname, read by /me and rejoin
+        .filter(GameParticipant.token == token)
+        .first()
+    ) if token else None
     if membership is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your session has expired. Join the game again.")
     if not membership.is_active:
@@ -164,9 +169,15 @@ def rejoin_game(db: Session, pin: str, token: str) -> GameParticipant:
 
 
 def active_players(db: Session, game_id: int) -> list[GameParticipant]:
-    """Players still in the game. Removed players are never scored or ranked."""
+    """
+    Players still in the game. Removed players are never scored or ranked.
+
+    Nicknames are loaded in the same round trip (one extra SELECT for everyone,
+    not one per player), so leaderboards stay fast with a full room.
+    """
     return (
         db.query(GameParticipant)
+        .options(selectinload(GameParticipant.participant))
         .filter(GameParticipant.game_id == game_id, GameParticipant.is_active.is_(True))
         .all()
     )

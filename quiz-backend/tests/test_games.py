@@ -16,6 +16,7 @@ Covers:
   - Leaderboard: overall, per round, rank_delta, climbers, close battles, limit
   - My stats: before and after scoring, last result
   - The correct answer is never leaked to players before scoring
+  - Query counts: the leaderboard and /me don't run a query per player
 
 Developer 3 owns the game lifecycle (start, next question, pause, remove a
 player), so these tests set those columns directly through the db fixture.
@@ -27,8 +28,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
-from app.models import Admin, Answer, Game, GameParticipant, Option, Question
+from app.models import Admin, Answer, Game, GameParticipant, Option, Question, ScoredQuestion
 from app.security import hash_password
 from app.services import answer_service, participant_service
 
@@ -1079,3 +1081,58 @@ class TestNoLeakBeforeScoring:
         assert me["last_result"]["question_id"] == quiz.q1.id     # only the revealed question
         assert (me["score"], me["streak"]) == (950, 1)
         assert _board(client, game["id"])["top"][0]["score"] == 950
+
+
+# ── Query counts (no N+1 on nicknames) ────────────────────────────────────────
+
+def _statements(db, call) -> int:
+    """How many SQL statements the API runs for call()."""
+    seen = []
+
+    def count(conn, cursor, statement, parameters, context, executemany):
+        seen.append(statement)
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        response = call()
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert response.status_code == 200, response.text
+    return len(seen)
+
+
+class TestQueryCounts:
+    """Nicknames are eager-loaded: the number of queries doesn't grow with the number of players."""
+
+    def _game_with(self, client, db, auth_headers, quiz, how_many) -> tuple[dict, Player]:
+        game = _create_game(client, auth_headers, quiz.id)
+        players = [_join(client, game["pin"], f"Player{n}") for n in range(how_many)]
+        # Scored-looking state so the top list, climbers and close battles all have entries.
+        db.expire_all()
+        rows = db.query(GameParticipant).filter_by(game_id=game["id"]).order_by(GameParticipant.id).all()
+        for position, row in enumerate(rows, start=1):
+            row.total_score = 50 * position
+            row.rank = len(rows) + 1 - position
+            row.previous_rank = position
+        db.add(ScoredQuestion(game_id=game["id"], question_id=quiz.q1.id))
+        db.commit()
+        return game, players[0]
+
+    def test_leaderboard_and_me_queries_stay_constant(self, client, db, auth_headers, quiz):
+        small_game, small_player = self._game_with(client, db, auth_headers, quiz, 3)
+        big_game, big_player = self._game_with(client, db, auth_headers, quiz, 30)
+
+        board = _board(client, big_game["id"], limit=100)
+        assert len(board["top"]) == 30 and board["climbers"] and board["close_battles"]
+
+        def leaderboard(game):
+            return lambda: client.get(f"{API}/games/{game['id']}/leaderboard", params={"limit": 100})
+
+        def me(game, player):
+            return lambda: client.get(f"{API}/games/{game['id']}/me", headers=player.headers)
+
+        small, big = _statements(db, leaderboard(small_game)), _statements(db, leaderboard(big_game))
+        assert small == big, f"leaderboard ran {small} queries for 3 players but {big} for 30"
+        assert big <= 5
+        assert _statements(db, me(small_game, small_player)) == _statements(db, me(big_game, big_player))
