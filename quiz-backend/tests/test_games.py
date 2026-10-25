@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient
 
 from app.models import Admin, Answer, Game, GameParticipant
 from app.security import hash_password
-from app.services import answer_service
+from app.services import answer_service, participant_service
 
 API = "/api/v1"
 
@@ -282,12 +282,30 @@ class TestCreateGame:
         assert data["quiz_id"] == quiz.id
         assert data["status"] == "lobby"
         assert data["current_question_id"] is None
-        assert len(data["pin"]) == 6 and data["pin"].isdigit()
+        assert len(data["pin"]) == 8 and data["pin"].isdigit()
 
     def test_each_game_gets_its_own_pin(self, client, auth_headers, quiz):
         first = _create_game(client, auth_headers, quiz.id)
         second = _create_game(client, auth_headers, quiz.id)
         assert first["pin"] != second["pin"]
+
+    def test_pin_is_always_8_digits(self, db, monkeypatch):
+        """The smallest and largest PINs the generator can draw are both 8 digits."""
+        bounds = []
+        for draw, expected in ((0, "10000000"), (89_999_999, "99999999")):
+            monkeypatch.setattr(
+                participant_service.secrets, "randbelow",
+                lambda bound, draw=draw: bounds.append(bound) or draw,
+            )
+            assert participant_service._new_pin(db) == expected
+        assert bounds == [90_000_000, 90_000_000]
+
+    def test_pin_already_in_use_is_skipped(self, client, auth_headers, quiz, monkeypatch):
+        draws = iter([0, 0, 1])     # the second game draws the first game's PIN, then a free one
+        monkeypatch.setattr(participant_service.secrets, "randbelow", lambda bound: next(draws))
+        first = _create_game(client, auth_headers, quiz.id)
+        second = _create_game(client, auth_headers, quiz.id)
+        assert (first["pin"], second["pin"]) == ("10000000", "10000001")
 
     def test_requires_admin(self, client, quiz):
         r = client.post(f"{API}/games", json={"quiz_id": quiz.id})
@@ -321,7 +339,7 @@ class TestJoin:
         assert r.json()["nickname"] == "Rathi K"
 
     def test_wrong_pin_404(self, client, game):
-        r = client.post(f"{API}/games/join", json={"pin": "000000", "nickname": "Rathi"})
+        r = client.post(f"{API}/games/join", json={"pin": "00000000", "nickname": "Rathi"})
         assert r.status_code == 404
 
     @pytest.mark.parametrize("taken", ["Rathi", "RATHI", "  rathi "])
@@ -387,7 +405,7 @@ class TestRejoin:
         assert r.status_code == 401
 
     def test_wrong_pin_404(self, client, game, players):
-        r = client.post(f"{API}/games/rejoin", json={"pin": "000000", "token": players[0].token})
+        r = client.post(f"{API}/games/rejoin", json={"pin": "00000000", "token": players[0].token})
         assert r.status_code == 404
 
     def test_removed_player_403(self, client, db, game, players):

@@ -264,7 +264,7 @@ class Game(Base):
     # The quiz template this game is running.
     quiz_id = Column(Integer, ForeignKey("quizzes.id", ondelete="RESTRICT"), nullable=False)
 
-    # 6-digit PIN for participants to join (Dev 2 + Dev 3).
+    # 8-digit PIN for participants to join (Dev 2 + Dev 3).
     pin = Column(String(10), unique=True, nullable=True, index=True)
 
     # Game lifecycle state (Dev 3 manages transitions).

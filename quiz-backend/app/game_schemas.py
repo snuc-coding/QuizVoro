@@ -35,12 +35,12 @@ class GameOut(OrmBase):
 # ── Join / rejoin (participant) ──────────────────────────────────────────────
 
 class JoinRequest(BaseModel):
-    pin: str = Field(..., min_length=4, max_length=10, examples=["482913"])
+    pin: str = Field(..., min_length=4, max_length=10, examples=["48291375"])
     nickname: str = Field(..., max_length=64, examples=["Rathi"])
 
 
 class RejoinRequest(BaseModel):
-    pin: str = Field(..., min_length=4, max_length=10, examples=["482913"])
+    pin: str = Field(..., min_length=4, max_length=10, examples=["48291375"])
     token: str = Field(..., min_length=10, max_length=64)
 
 

@@ -1,7 +1,7 @@
 """
 participant_service.py — Games, joining and rejoining (Developer 2).
 
-  create_game        admin starts a live game for one of their quizzes -> 6-digit PIN
+  create_game        admin starts a live game for one of their quizzes -> 8-digit PIN
   join_game          a player joins with PIN + nickname -> secret rejoin token
   rejoin_game        a player whose phone dropped comes back with PIN + token
   get_participant_by_token   used by the X-Participant-Token dependency
@@ -26,9 +26,9 @@ PIN_ATTEMPTS = 20
 
 
 def _new_pin(db: Session) -> str:
-    """A random 6-digit PIN no other game uses (games.pin is unique across all games)."""
+    """A random 8-digit PIN (never a leading zero) no other game uses (games.pin is unique)."""
     for _ in range(PIN_ATTEMPTS):
-        pin = str(100_000 + secrets.randbelow(900_000))
+        pin = str(10_000_000 + secrets.randbelow(90_000_000))
         if db.query(Game.id).filter(Game.pin == pin).first() is None:
             return pin
     raise HTTPException(

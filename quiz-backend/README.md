@@ -596,7 +596,7 @@ Players join with the PIN and a nickname, answer the open question, and are scor
 ### Endpoints (`/api/v1/games`)
 | Method | Endpoint | Who | Description | Status |
 |---|---|---|---|---|
-| `POST` | `/api/v1/games` | Admin | Create a game for your quiz; returns the 6-digit `pin` | `201 Created` |
+| `POST` | `/api/v1/games` | Admin | Create a game for your quiz; returns the 8-digit `pin` | `201 Created` |
 | `POST` | `/api/v1/games/join` | Player | `{pin, nickname}` → `token` (the phone keeps it in localStorage) | `201 Created` |
 | `POST` | `/api/v1/games/rejoin` | Player | `{pin, token}` → the same player, score and streak | `200 OK` |
 | `GET` | `/api/v1/games/{gameId}/questions/current` | Player | Open question without `is_correct`, plus `opened_at`, `deadline`, `server_time`, `already_answered` | `200 OK` |

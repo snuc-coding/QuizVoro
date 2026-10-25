@@ -55,7 +55,7 @@ def _join_out(membership: GameParticipant) -> JoinOut:
     response_model=GameOut,
     status_code=status.HTTP_201_CREATED,
     summary="Create Game",
-    description="Start a live game for one of your quizzes. Returns the 6-digit PIN players join with.",
+    description="Start a live game for one of your quizzes. Returns the 8-digit PIN players join with.",
     responses={
         201: {"description": "Game created in the lobby."},
         403: {"description": "Not the quiz owner."},
