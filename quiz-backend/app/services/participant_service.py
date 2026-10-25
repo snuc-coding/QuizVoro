@@ -2,6 +2,7 @@
 participant_service.py — Games, joining and rejoining (Developer 2).
 
   create_game        admin starts a live game for one of their quizzes -> 8-digit PIN
+                     (needs a question; publishes the quiz so it can't be edited mid-game)
   join_game          a player joins with PIN + nickname -> secret rejoin token
   rejoin_game        a player whose phone dropped comes back with PIN + token
   get_participant_by_token   used by the X-Participant-Token dependency
@@ -18,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import scoring
-from app.models import Admin, Game, GameParticipant, Participant
+from app.models import Admin, Game, GameParticipant, Participant, Question, Round
 from app.nicknames import NicknameRejected, check_nickname, nickname_key
 from app.services.quiz_service import get_quiz_and_verify_ownership
 
@@ -38,14 +39,31 @@ def _new_pin(db: Session) -> str:
 
 
 def create_game(db: Session, quiz_id: int, admin: Admin) -> Game:
-    """Create a game in the 'lobby' state for a quiz the admin owns."""
+    """
+    Create a game in the 'lobby' state for a quiz the admin owns.
+
+    The quiz needs at least one question. Creating the game also publishes the
+    quiz, in the same commit: Developer 1 refuses edits to a published quiz, so
+    nobody can change questions or correct answers while the game is live.
+    """
     quiz = get_quiz_and_verify_ownership(db, quiz_id, admin)
+    has_question = (
+        db.query(Question.id).join(Round, Round.id == Question.round_id).filter(Round.quiz_id == quiz.id).first()
+    )
+    if has_question is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Add at least one question before starting a game.",
+        )
+
+    quiz.is_published = True
     game = Game(quiz_id=quiz.id, pin=_new_pin(db), status="lobby")
     db.add(game)
     try:
         db.commit()
     except IntegrityError:  # two games drew the same PIN at the same moment
         db.rollback()
+        quiz.is_published = True
         game = Game(quiz_id=quiz.id, pin=_new_pin(db), status="lobby")
         db.add(game)
         db.commit()

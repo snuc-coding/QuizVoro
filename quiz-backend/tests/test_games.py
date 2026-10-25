@@ -2,7 +2,7 @@
 test_games.py — Tests for the live game endpoints (Developer 2).
 
 Covers:
-  - Create game (PIN, ownership, auth)
+  - Create game (PIN, ownership, auth, needs a question, publishes and locks the quiz)
   - Join: success, wrong PIN, taken nickname, blocked nickname, ended quiz
   - Rejoin: same player and score, bad token, other game's token, removed player
   - Current question (and its /current-question alias): no correct answers,
@@ -321,6 +321,52 @@ class TestCreateGame:
     def test_unknown_quiz_404(self, client, auth_headers):
         r = client.post(f"{API}/games", json={"quiz_id": 9999}, headers=auth_headers)
         assert r.status_code == 404
+
+    def test_quiz_without_questions_409(self, client, auth_headers):
+        quiz_id = client.post(f"{API}/quizzes", json={"title": "Empty"}, headers=auth_headers).json()["id"]
+        r = client.post(f"{API}/games", json={"quiz_id": quiz_id}, headers=auth_headers)
+        assert r.status_code == 409
+        assert r.json()["detail"] == "Add at least one question before starting a game."
+        # A round with no questions is still empty.
+        client.post(f"{API}/quizzes/{quiz_id}/rounds", json={"title": "R1", "round_number": 1}, headers=auth_headers)
+        r = client.post(f"{API}/games", json={"quiz_id": quiz_id}, headers=auth_headers)
+        assert r.status_code == 409
+        quiz = client.get(f"{API}/quizzes/{quiz_id}", headers=auth_headers).json()
+        assert quiz["is_published"] is False            # refused games publish nothing
+
+    def test_creating_a_game_publishes_the_quiz(self, client, auth_headers, quiz):
+        assert client.get(f"{API}/quizzes/{quiz.id}", headers=auth_headers).json()["is_published"] is False
+        _create_game(client, auth_headers, quiz.id)
+        assert client.get(f"{API}/quizzes/{quiz.id}", headers=auth_headers).json()["is_published"] is True
+
+    def test_quiz_is_locked_while_a_game_exists(self, client, auth_headers, quiz, game):
+        """Dev 1's published-quiz lock: questions and correct answers can't change mid-game."""
+        r = client.patch(f"{API}/questions/{quiz.q1.id}", json={"points": 5}, headers=auth_headers)
+        assert r.status_code == 409
+        assert client.delete(f"{API}/questions/{quiz.q1.id}", headers=auth_headers).status_code == 409
+        r = client.post(f"{API}/rounds/{quiz.round1}/questions", json={
+            "question_text": "Late addition",
+            "question_order": 3,
+            "options": [{"option_text": "x", "is_correct": True}, {"option_text": "y", "is_correct": False}],
+        }, headers=auth_headers)
+        assert r.status_code == 409
+        question = client.get(f"{API}/questions/{quiz.q1.id}", headers=auth_headers).json()
+        assert question["points"] == 1000
+        assert [o["is_correct"] for o in sorted(question["options"], key=lambda o: o["id"])] == [True, False, False]
+
+    def test_second_game_on_a_published_quiz(self, client, auth_headers, quiz, game):
+        assert _create_game(client, auth_headers, quiz.id)["pin"] != game["pin"]
+
+    def test_pin_retry_still_publishes(self, client, auth_headers, quiz, monkeypatch):
+        """The rare PIN clash path (rollback, then retry) must publish the quiz too."""
+        first = _create_game(client, auth_headers, quiz.id)
+        unpublish = client.patch(f"{API}/quizzes/{quiz.id}", json={"is_published": False}, headers=auth_headers)
+        assert unpublish.status_code == 200
+        pins = iter([first["pin"], "87654321"])
+        monkeypatch.setattr(participant_service, "_new_pin", lambda db: next(pins))
+        second = _create_game(client, auth_headers, quiz.id)
+        assert second["pin"] == "87654321"
+        assert client.get(f"{API}/quizzes/{quiz.id}", headers=auth_headers).json()["is_published"] is True
 
 
 # ── Join ──────────────────────────────────────────────────────────────────────
@@ -653,7 +699,8 @@ class TestSubmitAnswer:
         [row] = _answer_rows(db, quiz.q1)
         assert row.chosen_option_id == expected
 
-    def test_selected_option_d_on_a_four_option_question(self, client, db, auth_headers, quiz, game, players):
+    def test_selected_option_d_on_a_four_option_question(self, client, db, auth_headers, quiz):
+        # Added before the game starts: starting a game publishes (locks) the quiz.
         r = client.post(f"{API}/rounds/{quiz.round2}/questions", json={
             "question_text": "Four options",
             "question_order": 2,
@@ -661,6 +708,8 @@ class TestSubmitAnswer:
         }, headers=auth_headers)
         four = Q(r.json()["id"], quiz.round2, 0, 0, 0)
         fourth = max(o["id"] for o in r.json()["options"])
+        game = _create_game(client, auth_headers, quiz.id)
+        players = [_join(client, game["pin"], name) for name in ("Asha", "Bala")]
         _open(db, game["id"], four)
         assert self._pick(client, game, players[0], four, selected_option="D").json()["option_id"] == fourth
         assert self._pick(client, game, players[1], four, selected_option=3).json()["option_id"] == fourth
