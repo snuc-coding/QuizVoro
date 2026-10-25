@@ -599,11 +599,14 @@ Players join with the PIN and a nickname, answer the open question, and are scor
 | `POST` | `/api/v1/games` | Admin | Create a game for your quiz; returns the 8-digit `pin` | `201 Created` |
 | `POST` | `/api/v1/games/join` | Player | `{pin, nickname}` → `token` (the phone keeps it in localStorage) | `201 Created` |
 | `POST` | `/api/v1/games/rejoin` | Player | `{pin, token}` → the same player, score and streak | `200 OK` |
-| `GET` | `/api/v1/games/{gameId}/questions/current` | Player | Open question without `is_correct`, plus `question_number` / `total_questions` (for "QUESTION 1/2"), `opened_at`, `deadline`, `server_time`, `already_answered` | `200 OK` |
-| `POST` | `/api/v1/games/{gameId}/answers` | Player | `{question_id, option_id}`; the reply never says whether it is right | `201 Created` |
+| `GET` | `/api/v1/games/{gameId}/questions/current` | Player | Open question without `is_correct` (options listed by id), plus `question_number` / `total_questions` (for "QUESTION 1/2"), `opened_at`, `deadline`, `server_time`, `already_answered` | `200 OK` |
+| `GET` | `/api/v1/games/{gameId}/current-question` | Player | Same as `/questions/current` (alias used by the frontend) | `200 OK` |
+| `POST` | `/api/v1/games/{gameId}/answers` | Player | `{question_id, option_id}` or `{question_id, selected_option}` (see below); replies `{success: true, message: "Answer locked in!", accepted, question_id, option_id, response_time_ms}`, never whether it is right | `201 Created` |
 | `POST` | `/api/v1/games/{gameId}/questions/{questionId}/score` | Admin (quiz owner) | Score the open question. Repeat calls change nothing and return the same result with `already_scored: true` | `200 OK` |
 | `GET` | `/api/v1/games/{gameId}/leaderboard` | Anyone | `?limit=10`, `?round_id=` for one round; includes `rank_delta`, `climbers`, `close_battles` | `200 OK` |
 | `GET` | `/api/v1/games/{gameId}/me` | Player | Score, rank, streak and `last_result` for the latest scored question | `200 OK` |
+
+**Choosing an option:** send exactly one of `option_id` or `selected_option`, otherwise `422`. `selected_option` is a letter `"A"`-`"D"` (any case) or an index `0`-`3`, counted over the question's options ordered by id, which is the order the current question lists them. For example, `"B"` and `1` both pick the second option. A letter past the question's last option (such as `"D"` on a three-option question) returns `422`. The reply's `option_id` says which option was recorded.
 
 Player endpoints need the header `X-Participant-Token: <token>`: missing or unknown → `401`, removed or another game's token → `403`. Rejected answers return `409` with a message to show (paused, not open, late, already answered, closed); an option from another question returns `422`.
 
@@ -631,4 +634,4 @@ Game control sets these columns on `games`; Developer 2 code only reads them.
 ```powershell
 pytest tests/test_scoring.py tests/test_games.py -v
 ```
-The full suite (`pytest tests/ -v`) is 191 tests: Developer 1's 54 plus 137 for Developer 2.
+The full suite (`pytest tests/ -v`) is 227 tests: Developer 1's 54 plus 173 for Developer 2.
