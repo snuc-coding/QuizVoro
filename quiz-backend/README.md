@@ -636,4 +636,4 @@ Game control sets these columns on `games`; Developer 2 code only reads them.
 ```powershell
 pytest tests/test_scoring.py tests/test_games.py -v
 ```
-The full suite (`pytest tests/ -v`) is 227 tests: Developer 1's 54 plus 173 for Developer 2.
+The full suite (`pytest tests/ -v`) is 248 tests: Developer 1's 68 plus 180 for Developer 2.
