@@ -608,6 +608,8 @@ Players join with the PIN and a nickname, answer the open question, and are scor
 
 **Choosing an option:** send exactly one of `option_id` or `selected_option`, otherwise `422`. `selected_option` is a letter `"A"`-`"D"` (any case) or an index `0`-`3`, counted over the question's options ordered by id, which is the order the current question lists them. For example, `"B"` and `1` both pick the second option. A letter past the question's last option (such as `"D"` on a three-option question) returns `422`. The reply's `option_id` says which option was recorded.
 
+**No rate limiting on join or answers:** unlike admin login, these endpoints deliberately have no per-IP limit, because the whole venue shares one Wi-Fi or carrier IP and a per-IP limit would lock out the room. Duplicates are already blocked by the database: one answer per player per question, and one nickname per game.
+
 Player endpoints need the header `X-Participant-Token: <token>`: missing or unknown → `401`, removed or another game's token → `403`. Rejected answers return `409` with a message to show (paused, not open, late, already answered, closed); an option from another question returns `422`.
 
 **Scoring:** a correct answer earns `round(points × (1 − 0.5 × time / time_limit))`, timed on the server from `current_question_started_at`. Wrong or no answer earns 0. Answers up to 300 ms after the deadline score half; later ones are rejected. Ties are broken by more correct answers, then less total time on correct answers, then earlier join.

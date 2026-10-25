@@ -32,6 +32,11 @@ router = APIRouter(
     tags=["Games"],
 )
 
+# No per-IP rate limit on join or answers, unlike admin login: every phone in the
+# venue shares one Wi-Fi or carrier IP, so a per-IP limit would lock out the whole
+# room at once. Duplicates are blocked instead, by unique constraints in the
+# database: one answer per player per question, one nickname per game.
+
 
 def current_player(
     x_participant_token: str | None = Header(None, description="Token returned by join or rejoin."),

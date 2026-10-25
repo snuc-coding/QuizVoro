@@ -425,6 +425,14 @@ class TestJoin:
         r = client.post(f"{API}/games/join", json={"pin": game["pin"], "nickname": "Rathi"})
         assert r.status_code == 409
 
+    def test_a_full_room_on_one_ip_can_join_and_answer(self, client, db, quiz, game):
+        """No per-IP limit: the whole venue shares one IP (TestClient sends every request from one)."""
+        room = [_join(client, game["pin"], f"Guest{n}") for n in range(60)]
+        _open(db, game["id"], quiz.q1)
+        for player in room:
+            assert _answer(client, game["id"], player, quiz.q1, quiz.q1.right).status_code == 201
+        assert len(_answer_rows(db, quiz.q1)) == 60
+
     def test_late_joiner_can_join_running_game(self, client, db, quiz, game):
         _open(db, game["id"], quiz.q1)
         r = client.post(f"{API}/games/join", json={"pin": game["pin"], "nickname": "Rathi"})
