@@ -5,7 +5,8 @@ Covers:
   - Create game (PIN, ownership, auth)
   - Join: success, wrong PIN, taken nickname, blocked nickname, ended quiz
   - Rejoin: same player and score, bad token, other game's token, removed player
-  - Current question: no correct answers, timing, question number / total,
+  - Current question (and its /current-question alias): no correct answers,
+    options by id, timing, question number / total,
     already_answered, paused, none open
   - Submit answer: accepted, late, grace window, duplicate, wrong question,
     wrong option, paused, not open yet, after scoring, removed player;
@@ -423,6 +424,27 @@ class TestCurrentQuestion:
 
     def _get(self, client, game, player):
         return client.get(f"{API}/games/{game['id']}/questions/current", headers=player.headers)
+
+    def test_current_question_alias(self, client, db, quiz, game, players):
+        """/current-question serves the same response as /questions/current."""
+        _open(db, game["id"], quiz.q2)
+        _answer(client, game["id"], players[0], quiz.q2, quiz.q2.wrong)
+        original = self._get(client, game, players[0]).json()
+        alias = client.get(f"{API}/games/{game['id']}/current-question", headers=players[0].headers)
+        assert alias.status_code == 200
+        assert "is_correct" not in alias.text
+        data = alias.json()
+        assert data.pop("server_time") and original.pop("server_time")
+        assert data == original
+        assert (data["question_number"], data["total_questions"], data["already_answered"]) == (2, 3, True)
+
+    def test_current_question_alias_errors_match(self, client, db, quiz, game, players):
+        alias = f"{API}/games/{game['id']}/current-question"
+        assert client.get(alias, headers=players[0].headers).status_code == 409     # lobby
+        _open(db, game["id"], quiz.q1)
+        assert client.get(alias).status_code == 401
+        _remove(db, players[0])
+        assert client.get(alias, headers=players[0].headers).status_code == 403
 
     def test_returns_question_without_correct_answers(self, client, db, quiz, game, players):
         _open(db, game["id"], quiz.q1)

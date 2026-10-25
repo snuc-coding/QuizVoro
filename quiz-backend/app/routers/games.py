@@ -6,6 +6,7 @@ Endpoints:
   POST /api/v1/games/join                                    player: join with PIN + nickname
   POST /api/v1/games/rejoin                                  player: come back with PIN + token
   GET  /api/v1/games/{gameId}/questions/current              player: the open question
+  GET  /api/v1/games/{gameId}/current-question               player: same, for the frontend
   POST /api/v1/games/{gameId}/answers                        player: lock in an answer
   POST /api/v1/games/{gameId}/questions/{questionId}/score   admin: score at the reveal
   GET  /api/v1/games/{gameId}/leaderboard                    anyone: standings
@@ -106,11 +107,12 @@ def rejoin_game(rejoin_in: RejoinRequest, db: Session = Depends(get_db)) -> Join
     return _join_out(participant_service.rejoin_game(db, rejoin_in.pin, rejoin_in.token))
 
 
-@router.get(
-    "/{gameId}/questions/current",
+_CURRENT_QUESTION_DOCS = dict(
     response_model=CurrentQuestionOut,
-    summary="Current Question",
-    description="The open question without correct answers, plus opened_at, deadline and server_time.",
+    description=(
+        "The open question without correct answers (options listed by id), plus "
+        "question_number / total_questions, opened_at, deadline and server_time."
+    ),
     responses={
         200: {"description": "The open question."},
         401: {"description": "Missing or unknown token."},
@@ -119,12 +121,16 @@ def rejoin_game(rejoin_in: RejoinRequest, db: Session = Depends(get_db)) -> Join
         409: {"description": "Game paused, not started or ended."},
     },
 )
+
+
+@router.get("/{gameId}/questions/current", summary="Current Question", **_CURRENT_QUESTION_DOCS)
+@router.get("/{gameId}/current-question", summary="Current Question (alias)", **_CURRENT_QUESTION_DOCS)
 def get_current_question(
     gameId: int,
     player: GameParticipant = Depends(current_player),
     db: Session = Depends(get_db),
 ) -> CurrentQuestionOut:
-    """GET /api/v1/games/{gameId}/questions/current"""
+    """GET /api/v1/games/{gameId}/questions/current (also /current-question)"""
     return answer_service.current_question(db, gameId, player)
 
 
