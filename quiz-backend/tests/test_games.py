@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from app.models import Admin, Answer, Game, GameParticipant
+from app.models import Admin, Answer, Game, GameParticipant, Option, Question
 from app.security import hash_password
 from app.services import answer_service, participant_service
 
@@ -433,6 +433,23 @@ class TestCurrentQuestion:
         for option in question["options"]:
             assert set(option) == {"id", "option_text", "question_id"}
         assert "is_correct" not in r.text
+
+    def test_options_are_listed_by_id(self, client, db, quiz, game, players):
+        _open(db, game["id"], quiz.q1)
+        ids = [o["id"] for o in self._get(client, game, players[0]).json()["question"]["options"]]
+        assert ids == sorted(ids) == [quiz.q1.right, quiz.q1.wrong, quiz.q1.other]
+
+    def test_options_sorted_even_if_loaded_out_of_order(self):
+        """The database may return options in any order; the phone always gets them by id."""
+        question = Question(
+            id=1, question_text="?", question_type="MCQ", time_limit=30, points=1000,
+            question_order=1, media_url=None, media_type=None, round_id=1,
+            options=[Option(id=9, option_text="C", question_id=1), Option(id=3, option_text="A", question_id=1),
+                     Option(id=5, option_text="B", question_id=1)],
+        )
+        out = answer_service.participant_question(question)
+        assert [o.id for o in out.options] == [3, 5, 9]
+        assert [o.id for o in answer_service.ordered_options(question)] == [3, 5, 9]
 
     def test_timing(self, client, db, quiz, game, players):
         _open(db, game["id"], quiz.q1, seconds_ago=5)

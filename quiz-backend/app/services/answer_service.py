@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app import scoring
 from app.game_schemas import AnswerAck, AnswerIn, CurrentQuestionOut, OptionCount, ScoreQuestionOut
 from app.models import Answer, Game, GameParticipant, Option, Question, Round, ScoredQuestion
-from app.schemas import ParticipantQuestionOut
+from app.schemas import ParticipantOptionOut, ParticipantQuestionOut
 from app.services.participant_service import active_players, get_player_game, standing
 
 _NOT_RUNNING = {
@@ -76,6 +76,18 @@ def _quiz_question_ids(db: Session, quiz_id: int) -> list[int]:
     ]
 
 
+def ordered_options(question: Question) -> list[Option]:
+    """A question's options by id: the order phones show them and letters A-D refer to."""
+    return sorted(question.options, key=lambda option: option.id)
+
+
+def participant_question(question: Question) -> ParticipantQuestionOut:
+    """The question as players see it: no is_correct, options in ordered_options order."""
+    out = ParticipantQuestionOut.model_validate(question)
+    out.options = [ParticipantOptionOut.model_validate(option) for option in ordered_options(question)]
+    return out
+
+
 # ── Players ──────────────────────────────────────────────────────────────────
 
 def current_question(db: Session, game_id: int, player: GameParticipant) -> CurrentQuestionOut:
@@ -89,7 +101,7 @@ def current_question(db: Session, game_id: int, player: GameParticipant) -> Curr
     opened_at = scoring.as_utc(game.current_question_started_at)
     question_ids = _quiz_question_ids(db, game.quiz_id)
     return CurrentQuestionOut(
-        question=ParticipantQuestionOut.model_validate(question),
+        question=participant_question(question),
         question_number=question_ids.index(question.id) + 1,
         total_questions=len(question_ids),
         opened_at=opened_at,
