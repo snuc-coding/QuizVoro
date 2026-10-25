@@ -145,6 +145,59 @@ class TestGetRound:
         assert response.status_code == 404
 
 
+class TestUpdateRound:
+    """Tests for PATCH /api/v1/rounds/{roundId}"""
+
+    def test_update_round_title(self, client: TestClient, auth_headers):
+        quiz_id = _create_quiz(client, auth_headers)
+        create = client.post(
+            f"/api/v1/quizzes/{quiz_id}/rounds",
+            json={"title": "Round 1", "round_number": 1},
+            headers=auth_headers,
+        )
+        round_id = create.json()["id"]
+
+        patch_res = client.patch(
+            f"/api/v1/rounds/{round_id}",
+            json={"title": "Updated Round Title"},
+            headers=auth_headers,
+        )
+        assert patch_res.status_code == 200
+        assert patch_res.json()["title"] == "Updated Round Title"
+
+    def test_update_round_null_title_returns_422(self, client: TestClient, auth_headers):
+        quiz_id = _create_quiz(client, auth_headers)
+        create = client.post(
+            f"/api/v1/quizzes/{quiz_id}/rounds",
+            json={"title": "Round 1", "round_number": 1},
+            headers=auth_headers,
+        )
+        round_id = create.json()["id"]
+
+        patch_res = client.patch(
+            f"/api/v1/rounds/{round_id}",
+            json={"title": None},
+            headers=auth_headers,
+        )
+        assert patch_res.status_code == 422
+
+    def test_update_round_null_number_returns_422(self, client: TestClient, auth_headers):
+        quiz_id = _create_quiz(client, auth_headers)
+        create = client.post(
+            f"/api/v1/quizzes/{quiz_id}/rounds",
+            json={"title": "Round 1", "round_number": 1},
+            headers=auth_headers,
+        )
+        round_id = create.json()["id"]
+
+        patch_res = client.patch(
+            f"/api/v1/rounds/{round_id}",
+            json={"round_number": None},
+            headers=auth_headers,
+        )
+        assert patch_res.status_code == 422
+
+
 class TestDeleteRound:
     """Tests for DELETE /api/v1/rounds/{roundId}"""
 

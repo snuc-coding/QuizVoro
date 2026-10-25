@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
 
     # ── Miscellaneous ─────────────────────────────────────────────────────────
-    ENVIRONMENT: str = "development"
+    ENVIRONMENT: str = "production"
 
     model_config = SettingsConfigDict(
         env_file=".env",          # look for .env in the current working directory

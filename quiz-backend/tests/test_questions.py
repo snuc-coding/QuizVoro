@@ -278,3 +278,23 @@ class TestAnswerSecurity:
         options = create.json()["options"]
         correct_count = sum(1 for o in options if o["is_correct"])
         assert correct_count == 1, f"Expected exactly 1 correct option, found {correct_count}"
+
+    def test_update_question_null_text_returns_422(self, client: TestClient, auth_headers):
+        """Updating question with null text returns 422."""
+        quiz_id = _create_quiz(client, auth_headers)
+        round_id = _create_round(client, auth_headers, quiz_id)
+        create = client.post(f"/api/v1/rounds/{round_id}/questions", json=VALID_QUESTION, headers=auth_headers)
+        q_id = create.json()["id"]
+
+        patch_res = client.patch(f"/api/v1/questions/{q_id}", json={"question_text": None}, headers=auth_headers)
+        assert patch_res.status_code == 422
+
+    def test_add_question_to_published_quiz_returns_409(self, client: TestClient, auth_headers):
+        """Adding questions to an already published quiz is rejected with 409."""
+        quiz_id = _create_quiz(client, auth_headers)
+        round_id = _create_round(client, auth_headers, quiz_id)
+        client.patch(f"/api/v1/quizzes/{quiz_id}", json={"is_published": True}, headers=auth_headers)
+
+        res = client.post(f"/api/v1/rounds/{round_id}/questions", json=VALID_QUESTION, headers=auth_headers)
+        assert res.status_code == 409
+        assert "unpublish" in res.json()["detail"].lower()

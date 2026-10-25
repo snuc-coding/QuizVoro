@@ -2,28 +2,35 @@
 main.py — FastAPI application entry point.
 
 This file:
-  1. Creates the FastAPI app instance.
+  1. Creates the FastAPI app instance for QuizVoro.
   2. Registers all routers under the /api/v1 prefix.
-  3. Configures CORS.
-  4. Provides a health-check endpoint.
+  3. Mounts static media files at /media.
+  4. Configures CORS.
+  5. Provides a health-check endpoint.
 
 To run:
     uvicorn app.main:app --reload
 """
 
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.routers import auth, quizzes, rounds, questions, games
 
 settings = get_settings()
 
+# Ensure media directory exists before mounting
+media_path = Path(settings.MEDIA_DIR).resolve()
+media_path.mkdir(parents=True, exist_ok=True)
+
 # ── App instance ──────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="Cognizant Quiz Club — Live Quiz API",
+    title="QuizVoro — Live Quiz API",
     description=(
-        "Backend API for the Cognizant Quiz Club Kahoot-like live quiz application.\n\n"
+        "Backend API for QuizVoro — the live multiplayer quiz platform.\n\n"
         "**Developer 1** (Auth + Quiz Management) endpoints are implemented here.\n\n"
         "Developer 2 (Participants + Scoring) and Developer 3 (WebSockets + Game Control) "
         "will extend this API.\n\n"
@@ -45,6 +52,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Mount Static Media ────────────────────────────────────────────────────────
+# Enables public access to uploaded question images/audio/video at /media/<filename>
+# for participants (Dev 2) and live stage displays (Dev 3).
+app.mount("/media", StaticFiles(directory=str(media_path)), name="media")
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 API_PREFIX = "/api/v1"
@@ -79,4 +91,4 @@ def health_check() -> dict:
     Simple liveness probe.
     Returns {"status": "ok"} when the application is running.
     """
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "app": "QuizVoro", "version": "1.0.0"}

@@ -27,6 +27,37 @@ router = APIRouter(
 settings = get_settings()
 
 
+import time
+from collections import defaultdict
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+
+# In-memory tracking of failed login attempts: ip -> list of failure timestamps
+_failed_attempts: dict[str, list[float]] = defaultdict(list)
+_MAX_FAILED_ATTEMPTS = 5
+_LOCKOUT_WINDOW_SECONDS = 60
+
+
+def _check_rate_limit(client_ip: str) -> None:
+    now = time.time()
+    # Filter attempts within the window
+    attempts = [t for t in _failed_attempts[client_ip] if now - t < _LOCKOUT_WINDOW_SECONDS]
+    _failed_attempts[client_ip] = attempts
+    if len(attempts) >= _MAX_FAILED_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts. Please try again later.",
+            headers={"Retry-After": str(_LOCKOUT_WINDOW_SECONDS)},
+        )
+
+
+def _record_failed_attempt(client_ip: str) -> None:
+    _failed_attempts[client_ip].append(time.time())
+
+
+def _reset_attempts(client_ip: str) -> None:
+    _failed_attempts.pop(client_ip, None)
+
+
 @router.post(
     "/login",
     response_model=TokenResponse,
@@ -40,29 +71,34 @@ settings = get_settings()
         200: {"description": "Login successful. JWT token returned."},
         401: {"description": "Invalid username or password."},
         422: {"description": "Request body validation failed."},
+        429: {"description": "Too many failed login attempts."},
     },
 )
 def admin_login(
     login_request: AdminLoginRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
     """
     POST /api/v1/admin/login
 
     Validates username + password, returns a signed JWT access token.
-
-    Security notes:
-    - The error message is intentionally vague ("Invalid credentials") to avoid
-      leaking whether the username or password was wrong.
-    - Passwords are verified with Argon2 (timing-safe).
+    Protected against brute-force attacks via per-IP rate limiting.
     """
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    _check_rate_limit(client_ip)
+
     admin = authenticate_admin(db, login_request)
     if admin is None:
+        _record_failed_attempt(client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Successful login: reset failed attempts
+    _reset_attempts(client_ip)
 
     expire_minutes = settings.ACCESS_TOKEN_EXPIRE_MINUTES
     token = create_access_token(

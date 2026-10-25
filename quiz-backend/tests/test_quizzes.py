@@ -151,6 +151,33 @@ class TestUpdateQuiz:
         assert response.status_code == 200
         assert response.json()["is_published"] is True
 
+    def test_update_quiz_null_title_returns_422(self, client: TestClient, auth_headers):
+        """Updating title with null must return 422, not 500."""
+        create = client.post("/api/v1/quizzes", json={"title": "Original"}, headers=auth_headers)
+        quiz_id = create.json()["id"]
+
+        response = client.patch(f"/api/v1/quizzes/{quiz_id}", json={"title": None}, headers=auth_headers)
+        assert response.status_code == 422
+
+    def test_update_quiz_whitespace_title_returns_422(self, client: TestClient, auth_headers):
+        """Updating title with only whitespace must return 422."""
+        create = client.post("/api/v1/quizzes", json={"title": "Original"}, headers=auth_headers)
+        quiz_id = create.json()["id"]
+
+        response = client.patch(f"/api/v1/quizzes/{quiz_id}", json={"title": "   "}, headers=auth_headers)
+        assert response.status_code == 422
+
+    def test_update_published_quiz_returns_409(self, client: TestClient, auth_headers):
+        """Editing content of a published quiz is rejected with 409."""
+        create = client.post("/api/v1/quizzes", json={"title": "Published Quiz"}, headers=auth_headers)
+        quiz_id = create.json()["id"]
+        client.patch(f"/api/v1/quizzes/{quiz_id}", json={"is_published": True}, headers=auth_headers)
+
+        # Attempt to change title while published
+        res = client.patch(f"/api/v1/quizzes/{quiz_id}", json={"title": "New Title"}, headers=auth_headers)
+        assert res.status_code == 409
+        assert "unpublish" in res.json()["detail"].lower()
+
 
 class TestDeleteQuiz:
     """Tests for DELETE /api/v1/quizzes/{quizId}"""
@@ -174,3 +201,19 @@ class TestDeleteQuiz:
         """Delete non-existent quiz → 404."""
         response = client.delete("/api/v1/quizzes/99999", headers=auth_headers)
         assert response.status_code == 404
+
+    def test_delete_quiz_with_games_returns_409(self, client: TestClient, auth_headers, db):
+        """Deleting a quiz referenced by a Game violates RESTRICT and returns 409."""
+        from app.models import Game
+        create = client.post("/api/v1/quizzes", json={"title": "Game Quiz"}, headers=auth_headers)
+        quiz_id = create.json()["id"]
+
+        # Insert a game referencing this quiz
+        game = Game(quiz_id=quiz_id, pin="123456", status="lobby")
+        db.add(game)
+        db.commit()
+
+        # Attempt delete
+        response = client.delete(f"/api/v1/quizzes/{quiz_id}", headers=auth_headers)
+        assert response.status_code == 409
+        assert "associated" in response.json()["detail"].lower()
