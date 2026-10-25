@@ -107,6 +107,8 @@ class AnswerIn(BaseModel):
 
 class AnswerAck(BaseModel):
     """'Locked in' — deliberately says nothing about whether the answer is right."""
+    success: bool = True
+    message: str = "Answer locked in!"
     accepted: bool = True
     question_id: int
     option_id: int

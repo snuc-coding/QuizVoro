@@ -542,8 +542,8 @@ class TestSubmitAnswer:
         r = _answer(client, game["id"], players[0], quiz.q1, quiz.q1.right)
         assert r.status_code == 201
         data = r.json()
-        assert set(data) == {"accepted", "question_id", "option_id", "response_time_ms"}
-        assert data["accepted"] is True
+        assert set(data) == {"success", "message", "accepted", "question_id", "option_id", "response_time_ms"}
+        assert (data["success"], data["message"], data["accepted"]) == (True, "Answer locked in!", True)
         assert data["question_id"] == quiz.q1.id
         assert data["option_id"] == quiz.q1.right
         assert 2_000 <= data["response_time_ms"] < 5_000
@@ -559,7 +559,8 @@ class TestSubmitAnswer:
         wrong = _answer(client, game["id"], players[1], quiz.q1, quiz.q1.wrong)
         assert right.status_code == wrong.status_code == 201
         assert set(right.json()) == set(wrong.json())
-        assert right.json()["accepted"] == wrong.json()["accepted"] is True
+        for key in ("success", "message", "accepted"):
+            assert right.json()[key] == wrong.json()[key]
 
     def test_wrong_question_409(self, client, db, quiz, game, players):
         _open(db, game["id"], quiz.q1)
@@ -672,6 +673,17 @@ class TestSubmitAnswer:
         r = self._pick(client, game, players[0], quiz.q1, selected_option="A")
         assert r.status_code == 409
         assert r.json()["detail"] == "You already answered this question."
+
+    def test_letter_answer_gets_the_same_reply(self, client, db, quiz, game, players):
+        _open(db, game["id"], quiz.q1)
+        data = self._pick(client, game, players[0], quiz.q1, selected_option="B").json()
+        assert (data["success"], data["message"], data["accepted"]) == (True, "Answer locked in!", True)
+
+    def test_rejected_answer_has_no_success_message(self, client, db, quiz, game, players):
+        _open(db, game["id"], quiz.q1, seconds_ago=31)
+        r = _answer(client, game["id"], players[0], quiz.q1, quiz.q1.right)
+        assert r.status_code == 409
+        assert set(r.json()) == {"detail"}
 
     def test_answers_by_letter_are_scored(self, client, db, auth_headers, quiz, game, players):
         asha, bala = players[0], players[1]
