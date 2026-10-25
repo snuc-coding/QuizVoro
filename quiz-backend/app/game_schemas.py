@@ -58,6 +58,10 @@ class JoinOut(BaseModel):
 class CurrentQuestionOut(BaseModel):
     """The open question, WITHOUT correct answers, plus timing for the countdown."""
     question: ParticipantQuestionOut
+    question_number: int = Field(
+        ..., description="1-based position across the whole quiz (by round_number, then question_order).", examples=[1]
+    )
+    total_questions: int = Field(..., description="All questions in the quiz.", examples=[2])
     opened_at: datetime
     deadline: datetime
     server_time: datetime

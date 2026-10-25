@@ -599,7 +599,7 @@ Players join with the PIN and a nickname, answer the open question, and are scor
 | `POST` | `/api/v1/games` | Admin | Create a game for your quiz; returns the 8-digit `pin` | `201 Created` |
 | `POST` | `/api/v1/games/join` | Player | `{pin, nickname}` → `token` (the phone keeps it in localStorage) | `201 Created` |
 | `POST` | `/api/v1/games/rejoin` | Player | `{pin, token}` → the same player, score and streak | `200 OK` |
-| `GET` | `/api/v1/games/{gameId}/questions/current` | Player | Open question without `is_correct`, plus `opened_at`, `deadline`, `server_time`, `already_answered` | `200 OK` |
+| `GET` | `/api/v1/games/{gameId}/questions/current` | Player | Open question without `is_correct`, plus `question_number` / `total_questions` (for "QUESTION 1/2"), `opened_at`, `deadline`, `server_time`, `already_answered` | `200 OK` |
 | `POST` | `/api/v1/games/{gameId}/answers` | Player | `{question_id, option_id}`; the reply never says whether it is right | `201 Created` |
 | `POST` | `/api/v1/games/{gameId}/questions/{questionId}/score` | Admin (quiz owner) | Score the open question. Repeat calls change nothing and return the same result with `already_scored: true` | `200 OK` |
 | `GET` | `/api/v1/games/{gameId}/leaderboard` | Anyone | `?limit=10`, `?round_id=` for one round; includes `rank_delta`, `climbers`, `close_battles` | `200 OK` |
@@ -631,4 +631,4 @@ Game control sets these columns on `games`; Developer 2 code only reads them.
 ```powershell
 pytest tests/test_scoring.py tests/test_games.py -v
 ```
-The full suite (`pytest tests/ -v`) is 185 tests: Developer 1's 54 plus 131 for Developer 2.
+The full suite (`pytest tests/ -v`) is 191 tests: Developer 1's 54 plus 137 for Developer 2.

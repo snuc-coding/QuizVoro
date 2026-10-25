@@ -5,7 +5,8 @@ Covers:
   - Create game (PIN, ownership, auth)
   - Join: success, wrong PIN, taken nickname, blocked nickname, ended quiz
   - Rejoin: same player and score, bad token, other game's token, removed player
-  - Current question: no correct answers, timing, already_answered, paused, none open
+  - Current question: no correct answers, timing, question number / total,
+    already_answered, paused, none open
   - Submit answer: accepted, late, grace window, duplicate, wrong question,
     wrong option, paused, not open yet, after scoring, removed player
   - Score question: exact points, ranks, streak resets, scoring twice changes
@@ -441,6 +442,35 @@ class TestCurrentQuestion:
         server_time = _parse(data["server_time"])
         assert deadline - opened == timedelta(seconds=30)
         assert timedelta(seconds=5) <= server_time - opened < timedelta(seconds=8)
+
+    @pytest.mark.parametrize("name, number", [("q1", 1), ("q2", 2), ("q3", 3)])
+    def test_question_number_and_total(self, client, db, auth_headers, quiz, game, players, name, number):
+        _make_quiz(client, auth_headers)     # another quiz's questions must not count
+        _open(db, game["id"], getattr(quiz, name))
+        data = self._get(client, game, players[0]).json()
+        assert (data["question_number"], data["total_questions"]) == (number, 3)
+
+    def test_question_number_follows_round_then_question_order(self, client, db, auth_headers):
+        """Play order is round_number then question_order, not creation order or raw question_order."""
+        quiz_id = client.post(f"{API}/quizzes", json={"title": "Out of order"}, headers=auth_headers).json()["id"]
+        rounds = {
+            number: client.post(
+                f"{API}/quizzes/{quiz_id}/rounds",
+                json={"title": f"Round {number}", "round_number": number},
+                headers=auth_headers,
+            ).json()["id"]
+            for number in (2, 1)                                   # round 2 created first
+        }
+        second_round = _question(client, auth_headers, rounds[2], 1)
+        round_one_late = _question(client, auth_headers, rounds[1], 10)   # created before order 5
+        round_one_early = _question(client, auth_headers, rounds[1], 5)
+        game = _create_game(client, auth_headers, quiz_id)
+        player = _join(client, game["pin"], "Rathi")
+
+        for question, number in ((round_one_early, 1), (round_one_late, 2), (second_round, 3)):
+            _open(db, game["id"], question)
+            data = self._get(client, game, player).json()
+            assert (data["question"]["id"], data["question_number"], data["total_questions"]) == (question.id, number, 3)
 
     def test_already_answered_flips_after_answering(self, client, db, quiz, game, players):
         _open(db, game["id"], quiz.q1)

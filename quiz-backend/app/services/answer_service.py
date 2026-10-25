@@ -1,7 +1,7 @@
 """
 answer_service.py — The open question, answers and scoring (Developer 2).
 
-  current_question   the question on the player's phone (never which option is correct)
+  current_question   the question on the player's phone, e.g. "QUESTION 1/2" (never which option is correct)
   submit_answer      lock in one answer per player per question
   score_question     award points for a question, exactly once, at the reveal
 
@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app import scoring
 from app.game_schemas import AnswerAck, AnswerIn, CurrentQuestionOut, OptionCount, ScoreQuestionOut
-from app.models import Answer, Game, GameParticipant, Option, Question, ScoredQuestion
+from app.models import Answer, Game, GameParticipant, Option, Question, Round, ScoredQuestion
 from app.schemas import ParticipantQuestionOut
 from app.services.participant_service import active_players, get_player_game, standing
 
@@ -65,6 +65,17 @@ def _answer_of(db: Session, game_id: int, player_id: int, question_id: int) -> A
     )
 
 
+def _quiz_question_ids(db: Session, quiz_id: int) -> list[int]:
+    """Every question in the quiz, in play order: round_number, then question_order."""
+    return [
+        question_id
+        for (question_id,) in db.query(Question.id)
+        .join(Round, Round.id == Question.round_id)
+        .filter(Round.quiz_id == quiz_id)
+        .order_by(Round.round_number, Question.question_order)
+    ]
+
+
 # ── Players ──────────────────────────────────────────────────────────────────
 
 def current_question(db: Session, game_id: int, player: GameParticipant) -> CurrentQuestionOut:
@@ -76,8 +87,11 @@ def current_question(db: Session, game_id: int, player: GameParticipant) -> Curr
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No question is open right now.")
 
     opened_at = scoring.as_utc(game.current_question_started_at)
+    question_ids = _quiz_question_ids(db, game.quiz_id)
     return CurrentQuestionOut(
         question=ParticipantQuestionOut.model_validate(question),
+        question_number=question_ids.index(question.id) + 1,
+        total_questions=len(question_ids),
         opened_at=opened_at,
         deadline=opened_at + timedelta(seconds=question.time_limit),
         server_time=_now(),
