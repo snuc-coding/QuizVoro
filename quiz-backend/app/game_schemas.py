@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas import OrmBase, ParticipantQuestionOut
 
@@ -70,9 +70,39 @@ class CurrentQuestionOut(BaseModel):
 
 # ── Answers (participant) ────────────────────────────────────────────────────
 
+OPTION_LETTERS = "ABCD"
+
+
 class AnswerIn(BaseModel):
+    """
+    Send exactly one of option_id or selected_option.
+
+    selected_option is a letter "A"-"D" (any case) or an index 0-3 into the
+    question's options ordered by id, as the current question lists them.
+    After validation it always holds the index (0-3).
+    """
     question_id: int = Field(..., gt=0)
-    option_id: int = Field(..., gt=0)
+    option_id: int | None = Field(None, gt=0)
+    selected_option: str | int | None = Field(
+        None, description='"A"-"D" (any case) or 0-3, by option id order.', examples=["A"]
+    )
+
+    @field_validator("selected_option", mode="before")
+    @classmethod
+    def letter_or_index(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str) and len(value.strip()) == 1 and value.strip().upper() in OPTION_LETTERS:
+            return OPTION_LETTERS.index(value.strip().upper())
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < len(OPTION_LETTERS):
+            return value
+        raise ValueError('selected_option must be a letter "A"-"D" or an index 0-3.')
+
+    @model_validator(mode="after")
+    def exactly_one_choice(self) -> "AnswerIn":
+        if (self.option_id is None) == (self.selected_option is None):
+            raise ValueError("Send exactly one of option_id or selected_option.")
+        return self
 
 
 class AnswerAck(BaseModel):

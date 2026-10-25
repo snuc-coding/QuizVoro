@@ -111,6 +111,21 @@ def current_question(db: Session, game_id: int, player: GameParticipant) -> Curr
     )
 
 
+def _chosen_option(db: Session, question: Question, answer_in: AnswerIn) -> Option:
+    """The option picked by option_id, or by selected_option (an index into ordered_options)."""
+    if answer_in.option_id is not None:
+        option = db.get(Option, answer_in.option_id)
+    else:
+        options = ordered_options(question)
+        option = options[answer_in.selected_option] if answer_in.selected_option < len(options) else None
+    if option is None or option.question_id != question.id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="That option is not part of this question.",
+        )
+    return option
+
+
 def submit_answer(db: Session, game_id: int, player: GameParticipant, answer_in: AnswerIn) -> AnswerAck:
     """
     Lock in the player's answer to the open question.
@@ -131,12 +146,7 @@ def submit_answer(db: Session, game_id: int, player: GameParticipant, answer_in:
         raise _conflict("This question is closed.")
 
     question = db.get(Question, answer_in.question_id)
-    option = db.get(Option, answer_in.option_id)
-    if option is None or option.question_id != question.id:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="That option is not part of this question.",
-        )
+    option = _chosen_option(db, question, answer_in)
     if _answer_of(db, game.id, player.id, question.id) is not None:
         raise _conflict("You already answered this question.")
 

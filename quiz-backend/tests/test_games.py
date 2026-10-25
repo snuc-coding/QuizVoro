@@ -8,7 +8,8 @@ Covers:
   - Current question: no correct answers, timing, question number / total,
     already_answered, paused, none open
   - Submit answer: accepted, late, grace window, duplicate, wrong question,
-    wrong option, paused, not open yet, after scoring, removed player
+    wrong option, paused, not open yet, after scoring, removed player;
+    selected_option as a letter or index (mapping, range, exactly-one rule)
   - Score question: exact points, ranks, streak resets, scoring twice changes
     nothing, owner only, removed players ignored
   - Leaderboard: overall, per round, rank_delta, climbers, close battles, limit
@@ -605,6 +606,82 @@ class TestSubmitAnswer:
         r = _answer(client, game["id"], players[0], quiz.q1, quiz.q1.right)
         assert r.status_code == 409
         assert len(_answer_rows(db, quiz.q1)) == 1
+
+    # ── selected_option: a letter "A"-"D" or an index 0-3, by option id order ──
+
+    def _pick(self, client, game, player, question, **choice):
+        return client.post(
+            f"{API}/games/{game['id']}/answers",
+            json={"question_id": question.id, **choice},
+            headers=player.headers,
+        )
+
+    @pytest.mark.parametrize("choice, picked", [
+        ("A", "right"), ("a", "right"), (" a ", "right"), (0, "right"),
+        ("B", "wrong"), ("b", "wrong"), (1, "wrong"),
+        ("C", "other"), ("c", "other"), (2, "other"),
+    ])
+    def test_selected_option_maps_to_options_by_id(self, client, db, quiz, game, players, choice, picked):
+        _open(db, game["id"], quiz.q1)
+        r = self._pick(client, game, players[0], quiz.q1, selected_option=choice)
+        assert r.status_code == 201, r.text
+        expected = getattr(quiz.q1, picked)     # right < wrong < other by id
+        assert r.json()["option_id"] == expected
+        [row] = _answer_rows(db, quiz.q1)
+        assert row.chosen_option_id == expected
+
+    def test_selected_option_d_on_a_four_option_question(self, client, db, auth_headers, quiz, game, players):
+        r = client.post(f"{API}/rounds/{quiz.round2}/questions", json={
+            "question_text": "Four options",
+            "question_order": 2,
+            "options": [{"option_text": t, "is_correct": t == "4th"} for t in ("1st", "2nd", "3rd", "4th")],
+        }, headers=auth_headers)
+        four = Q(r.json()["id"], quiz.round2, 0, 0, 0)
+        fourth = max(o["id"] for o in r.json()["options"])
+        _open(db, game["id"], four)
+        assert self._pick(client, game, players[0], four, selected_option="D").json()["option_id"] == fourth
+        assert self._pick(client, game, players[1], four, selected_option=3).json()["option_id"] == fourth
+
+    @pytest.mark.parametrize("choice", ["D", "d", 3])
+    def test_selected_option_beyond_the_questions_options_422(self, client, db, quiz, game, players, choice):
+        _open(db, game["id"], quiz.q1)        # Q1 has three options: A-C
+        r = self._pick(client, game, players[0], quiz.q1, selected_option=choice)
+        assert r.status_code == 422
+        assert r.json()["detail"] == "That option is not part of this question."
+        assert _answer_rows(db, quiz.q1) == []
+
+    def test_option_id_and_selected_option_together_422(self, client, db, quiz, game, players):
+        _open(db, game["id"], quiz.q1)
+        r = self._pick(client, game, players[0], quiz.q1, option_id=quiz.q1.right, selected_option="A")
+        assert r.status_code == 422
+        assert _answer_rows(db, quiz.q1) == []
+
+    @pytest.mark.parametrize("choice", [{}, {"option_id": None}, {"selected_option": None}])
+    def test_neither_option_id_nor_selected_option_422(self, client, db, quiz, game, players, choice):
+        _open(db, game["id"], quiz.q1)
+        assert self._pick(client, game, players[0], quiz.q1, **choice).status_code == 422
+
+    @pytest.mark.parametrize("choice", ["E", "z", "", "AB", "2", 4, -1, 1.5, True, [0]])
+    def test_bad_selected_option_422(self, client, db, quiz, game, players, choice):
+        _open(db, game["id"], quiz.q1)
+        assert self._pick(client, game, players[0], quiz.q1, selected_option=choice).status_code == 422
+
+    def test_selected_option_is_still_one_answer_per_question(self, client, db, quiz, game, players):
+        _open(db, game["id"], quiz.q1)
+        assert self._pick(client, game, players[0], quiz.q1, option_id=quiz.q1.wrong).status_code == 201
+        r = self._pick(client, game, players[0], quiz.q1, selected_option="A")
+        assert r.status_code == 409
+        assert r.json()["detail"] == "You already answered this question."
+
+    def test_answers_by_letter_are_scored(self, client, db, auth_headers, quiz, game, players):
+        asha, bala = players[0], players[1]
+        _open(db, game["id"], quiz.q1)
+        self._pick(client, game, asha, quiz.q1, selected_option="a")
+        self._pick(client, game, bala, quiz.q1, selected_option=1)
+        result = _score(client, auth_headers, game["id"], quiz.q1).json()
+        assert (result["answered"], result["correct"]) == (2, 1)
+        assert _row(db, asha).correct_count == 1 and _row(db, asha).total_score > 0
+        assert _row(db, bala).total_score == 0
 
     def test_paused_game_409(self, client, db, quiz, game, players):
         _open(db, game["id"], quiz.q1)
