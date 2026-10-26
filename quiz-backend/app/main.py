@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
-from app.routers import auth, quizzes, rounds, questions, games
+from app.routers import auth, quizzes, rounds, questions, games, game_controls, websocket
 
 settings = get_settings()
 
@@ -82,6 +82,12 @@ app.include_router(questions.media_router, prefix=API_PREFIX)
 
 # Live games (Developer 2): /api/v1/games/...
 app.include_router(games.router, prefix=API_PREFIX)
+
+# Host game controls (Developer 3): /api/v1/games/...
+app.include_router(game_controls.router, prefix=API_PREFIX)
+
+# Real-time WebSockets (Developer 3): /api/v1/ws/games/...
+app.include_router(websocket.router, prefix=API_PREFIX)
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

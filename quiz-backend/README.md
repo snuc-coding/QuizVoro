@@ -636,4 +636,53 @@ Game control sets these columns on `games`; Developer 2 code only reads them.
 ```powershell
 pytest tests/test_scoring.py tests/test_games.py -v
 ```
-The full suite (`pytest tests/ -v`) is 248 tests: Developer 1's 68 plus 180 for Developer 2.
+The full suite (`pytest tests/ -v`) is 267 tests: Developer 1's 68, Developer 2's 180, and Developer 3's 19 real-time tests.
+
+---
+
+## 26. Developer 3: Real-Time WebSockets and Host Controls
+
+Developer 3 provides live, bi-directional WebSocket communication, host game lifecycle orchestration, and stage display broadcasting.
+
+### Architecture & Scalability
+- **Connection Manager**: In-memory room manager partitioned by `game_id` and role (`hosts`, `participants`, `stages`).
+- **Concurrency**: Designed for hundreds of concurrent players per quiz room on a single ASGI application worker.
+- **Multi-Worker Note**: In-memory connection management requires a single application worker (`uvicorn --workers 1`). For multi-worker deployments (e.g. distributed across multiple pods or behind a load balancer), an external pub/sub layer (such as Redis Pub/Sub) must be configured to synchronize room broadcasts across worker processes.
+
+### Endpoints
+
+#### 1. Host Control REST API (`/api/v1/games`)
+All endpoints require admin authentication (`Authorization: Bearer <token>`) and quiz ownership.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/games/{gameId}/stage-token` | Generate a cryptographically signed token for the public stage display screen. |
+| `POST` | `/api/v1/games/{gameId}/start` | Transition game from `lobby` to `active` and open Question 1. |
+| `POST` | `/api/v1/games/{gameId}/next-question` | Advance to the next question in round/question sequence, or finish if on the last question. |
+| `POST` | `/api/v1/games/{gameId}/pause` | Pause countdown timer and refuse answers. |
+| `POST` | `/api/v1/games/{gameId}/resume` | Resume timer, shifting start time forward so paused duration does not count. |
+| `POST` | `/api/v1/games/{gameId}/reveal` | Close question, score answers via `answer_service`, and broadcast results. |
+| `POST` | `/api/v1/games/{gameId}/end` | Manually end the game and broadcast final leaderboard. |
+| `POST` | `/api/v1/games/{gameId}/kick` | Deactivate a participant (`is_active = False`) and disconnect their live session. |
+
+#### 2. WebSocket Endpoints (`/api/v1/ws/games`)
+| Endpoint | Who | Auth Query Param | Behavior |
+|---|---|---|---|
+| `/api/v1/ws/games/{gameId}/host` | Admin Host | `?token=<admin_jwt>` | Receives game events and can send host commands (`START`, `NEXT_QUESTION`, `PAUSE`, `RESUME`, `REVEAL`, `END`, `KICK`). |
+| `/api/v1/ws/games/{gameId}/participant` | Player | `?token=<participant_token>` | Receives question starts, answer reveals with personal stats, and leaderboard updates. Can submit answers via `SUBMIT_ANSWER`. Host commands are strictly rejected. |
+| `/api/v1/ws/games/{gameId}/stage` | Stage Display | `?token=<stage_token>` | Read-only screen for audience/projector display. Any command sent is rejected. |
+
+### Cheating Prevention & Data Isolation
+- `QUESTION_STARTED` broadcasts always serialize question data through `ParticipantQuestionOut` (`app/schemas.py`), which deliberately omits `is_correct`.
+- Individual answers remain private. Hosts and Stage screens receive only aggregated answer counts (`ANSWER_COUNT_UPDATED`) during the active question phase.
+- Personal results (`last_result`, streak, rank delta) are unicast to the specific participant via `send_to_participant`.
+- Stage display screens cannot connect with a game ID or PIN alone; they require a cryptographically signed stage token issued by the quiz host.
+
+### Testing Commands
+```powershell
+# Run Developer 3 real-time tests
+pytest tests/test_realtime.py -v
+
+# Run the complete test suite (267 passed)
+pytest tests/ -v
+```
