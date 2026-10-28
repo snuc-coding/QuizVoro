@@ -1,0 +1,207 @@
+
+.answer-results {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 4px 2px;
+  color: #fff;
+  text-align: center;
+  font-family: inherit;
+}
+
+.results-chart-title {
+  margin: 0;
+  color: #e8d8ff;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-align: center;
+}
+
+.results-subtitle {
+  margin: 5px 0 12px;
+  color: #c9b4ff;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.results-chart {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: clamp(8px, 2.5vw, 18px);
+  height: 270px;
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.results-guides {
+  position: absolute;
+  inset: 28px 0 78px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.results-guide-line {
+  width: 100%;
+  border-top: 1px dashed rgba(201, 180, 255, 0.14);
+}
+
+.results-bar-column {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: 22px minmax(0, 1fr) 18px 18px 22px;
+  flex: 1;
+  min-width: 0;
+  justify-items: center;
+  align-items: center;
+  gap: 3px;
+}
+
+.results-percentage {
+  grid-row: 1;
+  align-self: center;
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 800;
+  opacity: 0;
+  transform: translateY(5px);
+  transition: opacity 350ms ease, transform 350ms ease;
+}
+
+.results-percentage.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.results-bar-track {
+  grid-row: 2;
+  align-self: stretch;
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  max-width: 90px;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 8px 8px 3px 3px;
+  background: #292333;
+}
+
+.results-bar {
+  width: 100%;
+  min-height: 0;
+  flex-shrink: 0;
+  border-radius: 7px 7px 2px 2px;
+  transition: height 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.results-option-label {
+  grid-row: 3;
+  align-self: center;
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 800;
+  line-height: 18px;
+}
+
+.results-option-text {
+  grid-row: 4;
+  align-self: center;
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #c9b4ff;
+  font-size: 0.7rem;
+  line-height: 18px;
+  text-align: center;
+}
+
+.results-tick-slot {
+  grid-row: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+}
+
+.results-correct-tick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  box-sizing: border-box;
+  border: 1px solid #84d600;
+  border-radius: 50%;
+  background: rgba(132, 214, 0, 0.12);
+  color: #a8f044;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.results-total {
+  margin: 8px 0 0;
+  color: #c9b4ff;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+/* Removed the extra demo disclaimer from this chart component. */
+
+.results-empty {
+  color: #c9b4ff;
+  text-align: center;
+}
+
+@media (min-width: 600px) {
+  .answer-results {
+    padding: 6px 8px;
+  }
+
+  .results-chart {
+    height: 300px;
+  }
+
+  .results-chart-title {
+    font-size: 1.05rem;
+  }
+
+  .results-subtitle {
+  margin: 5px 0 20px;
+  color: #c9b4ff;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+  .results-option-text {
+    font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 400px) {
+  .results-chart {
+    height: 205px;
+    gap: 6px;
+  }
+
+  .results-percentage {
+    font-size: 0.85rem;
+  }
+
+  .results-option-text {
+    font-size: 0.62rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .results-bar,
+  .results-percentage {
+    transition: none;
+  }
+}
