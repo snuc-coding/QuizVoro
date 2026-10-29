@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { submitMockAnswer } from "../services/questionService";
@@ -61,11 +60,7 @@ function getCorrectOptionIndex(question, options) {
   if (indexValue !== undefined && indexValue !== null && indexValue !== "") {
     const index = Number(indexValue);
 
-    if (
-      Number.isInteger(index) &&
-      index >= 0 &&
-      index < options.length
-    ) {
+    if (Number.isInteger(index) && index >= 0 && index < options.length) {
       return index;
     }
   }
@@ -177,8 +172,17 @@ function QuestionScreen() {
       }
     }
 
+    function handleFocus() {
+      loadQuiz();
+    }
+
     window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+      window.removeEventListener("focus", handleFocus);
+    };
   }, [loadQuiz]);
 
   const questions = Array.isArray(quiz?.questions) ? quiz.questions : [];
@@ -270,46 +274,99 @@ function QuestionScreen() {
     );
   }
 
-  if (liveState.status === "ended") {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-[#080710] px-4 text-center text-white">
-        <div>
-          <h1 className="brand-font mb-4 text-4xl">Asteris!</h1>
-          <h2 className="text-3xl font-extrabold">Quiz ended</h2>
-          <p className="mt-3 text-purple-200">Thanks for participating!</p>
-        </div>
-      </main>
-    );
-  }
-
+  // Show the leaderboard before the ended screen.
   if (liveState.showLeaderboard) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#080710] px-4 text-center text-white">
-        <div>
-          <h1 className="brand-font mb-4 text-4xl">Asteris!</h1>
-          <h2 className="text-3xl font-extrabold">Leaderboard</h2>
-          <p className="mt-3 text-purple-200">
+      <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#080710] px-4 py-8 text-center text-white">
+        <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-purple-700/25 blur-[100px]" />
+        <div className="pointer-events-none absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-violet-800/25 blur-[100px]" />
+
+        <section className="relative w-full max-w-xl rounded-3xl border border-purple-400/20 bg-[#15121E]/90 p-8 shadow-2xl sm:p-12">
+          <h1 className="brand-font mb-6 text-4xl">Asteris!</h1>
+          <div className="mb-5 text-4xl">🏆</div>
+          <p className="text-xs font-bold uppercase tracking-[0.25em] text-[#91F0DF]">
+            QUIZ LEADERBOARD
+          </p>
+          <h2 className="mt-3 text-3xl font-extrabold">Leaderboard</h2>
+          <p className="mt-4 text-purple-200">
             The host is showing the leaderboard.
           </p>
           <p className="mt-2 text-sm text-purple-300">
             Scores will appear when score tracking is connected.
           </p>
-        </div>
+        </section>
       </main>
     );
   }
 
-  if (liveState.status !== "running") {
+  if (liveState.status === "ended") {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#080710] px-4 text-center text-white">
-        <div>
-          <h1 className="brand-font mb-4 text-4xl">Asteris!</h1>
-          <h2 className="text-2xl font-extrabold">Get ready!</h2>
-          <p className="mt-3 text-purple-200">
-            {quiz.title || quiz.name || "Your quiz"} will begin when the host starts.
+      <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#080710] px-4 py-8 text-center text-white">
+        <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-purple-700/25 blur-[100px]" />
+        <section className="relative w-full max-w-xl rounded-3xl border border-purple-400/20 bg-[#15121E]/90 p-10 shadow-2xl">
+          <h1 className="brand-font mb-6 text-4xl">Asteris!</h1>
+          <div className="mb-5 text-4xl">🏆</div>
+          <h2 className="text-3xl font-extrabold">Quiz completed!</h2>
+          <p className="mt-4 text-purple-200">
+            Thanks for participating.
           </p>
-          <p className="mt-2 text-sm text-purple-300">Keep this page open.</p>
-        </div>
+        </section>
+      </main>
+    );
+  }
+
+  const isResults = liveState.status === "results";
+  const isReady = liveState.status === "ready";
+  const isWaiting = !isReady && !isResults && liveState.status !== "running";
+
+  // Keep the player in a stable waiting state during host transitions.
+  if (isResults || isReady || isWaiting) {
+    const isLastQuestion = questionIndex >= questions.length - 1;
+
+    let title = "Get ready!";
+    let message = `${quiz.title || quiz.name || "Your quiz"} will begin when the host starts.`;
+
+    if (isResults) {
+      title = isLastQuestion
+        ? "Waiting for the final leaderboard..."
+        : "Waiting for the next question...";
+
+      message = isLastQuestion
+        ? "The host is preparing to reveal the final rankings. Keep this page open."
+        : "The host is choosing the next step. Keep this page open.";
+    } else if (isWaiting) {
+      title = "Waiting for the host...";
+      message = "The host is preparing the next part of the quiz. Keep this page open.";
+    }
+
+    return (
+      <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#080710] px-4 py-8 text-white">
+        <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-purple-700/25 blur-[100px]" />
+        <div className="pointer-events-none absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-violet-800/25 blur-[100px]" />
+
+        <section className="relative w-full max-w-xl rounded-3xl border border-purple-400/20 bg-[#15121E]/90 p-8 text-center shadow-2xl sm:p-12">
+          <h1 className="brand-font mb-8 text-4xl text-white sm:text-5xl">
+            Asteris!
+          </h1>
+
+          <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl border border-purple-300/20 bg-purple-500/10 text-3xl">
+            {isResults ? "⏳" : "🎮"}
+          </div>
+
+          <p className="mb-3 text-xs font-bold uppercase tracking-[0.25em] text-[#91F0DF]">
+            {isResults ? "QUESTION COMPLETED" : "PLEASE WAIT"}
+          </p>
+
+          <h2 className="text-2xl font-extrabold sm:text-3xl">{title}</h2>
+
+          <p className="mt-4 leading-7 text-purple-200">{message}</p>
+
+          <div className="mt-8 flex justify-center gap-2" aria-label="Waiting">
+            <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[#91F0DF]" />
+            <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-purple-400 [animation-delay:150ms]" />
+            <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-fuchsia-400 [animation-delay:300ms]" />
+          </div>
+        </section>
       </main>
     );
   }
@@ -436,6 +493,7 @@ function QuestionScreen() {
                 {String(timeLeft % 60).padStart(2, "0")}
               </span>
             </div>
+
             <div
               className="h-2 overflow-hidden rounded-full bg-[#35204E]"
               role="progressbar"
@@ -451,6 +509,7 @@ function QuestionScreen() {
                 }}
               />
             </div>
+
             {timeLeft <= 5 && !submitted && (
               <p className="mt-2 text-right text-xs font-semibold text-rose-300">
                 Hurry! Time is running out.
@@ -517,18 +576,17 @@ function QuestionScreen() {
             </button>
           </>
         ) : (
-          <div className="rounded-3xl border border-purple-400/20 bg-[#15121E] p-3 sm:p-5">
-            <h2 className="mb-1 text-center text-xl font-extrabold uppercase tracking-[0.18em] text-purple-200">
-              RESULTS
-            </h2>
-            <AnswerResultsChart
-              options={chartOptions}
-              totalAnswers={demoTotalAnswers}
-            />
+          <div className="rounded-3xl border border-purple-400/20 bg-[#15121E] p-5 text-center">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-purple-500/15 text-2xl">
+              ⏳
+            </div>
+            <h2 className="text-xl font-extrabold">Time is up!</h2>
+            <p className="mt-2 text-purple-200">
+              Waiting for the host to show the results or continue.
+            </p>
           </div>
         )}
 
-        {/* Keep feedback visible before and after the timer ends. */}
         {submitted && (
           <div
             role="status"

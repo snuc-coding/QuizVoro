@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Routes,
   Route,
@@ -19,7 +19,7 @@ import AdminLoginPage from "./pages/AdminLoginPage";
 import CreateQuizPage from "./pages/CreateQuizPage";
 import QuizManagementPage from "./pages/QuizManagementPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
-import PresentationControlPage from "./pages/PresentationControlPage";
+import HostDashboard from "./pages/HostDashboard";
 
 function isAdminLoggedIn() {
   return sessionStorage.getItem("asterisAdminLoggedIn") === "true";
@@ -34,15 +34,107 @@ function AdminRoute({ children }) {
   );
 }
 
+// Load the selected saved quiz and display the new host dashboard.
+function HostDashboardRoute() {
+  const navigate = useNavigate();
+  const [quiz, setQuiz] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    try {
+      const selectedQuizId = sessionStorage.getItem(
+        "asterisSelectedQuizId"
+      );
+
+      const savedQuizzes = JSON.parse(
+        localStorage.getItem("asterisQuizzes") || "[]"
+      );
+
+      const selectedQuiz = Array.isArray(savedQuizzes)
+        ? savedQuizzes.find(
+            (item) =>
+              String(item.id) === String(selectedQuizId)
+          )
+        : null;
+
+      if (selectedQuiz) {
+        setQuiz(selectedQuiz);
+      }
+    } catch (error) {
+      console.error("Unable to load selected quiz:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  function handleOpenProjector() {
+    if (!quiz) return;
+
+    const projectorWindow = window.open(
+      `/stage?quizId=${encodeURIComponent(quiz.id)}`,
+      "quizvoro-projector"
+    );
+
+    if (projectorWindow) {
+      projectorWindow.focus();
+    } else {
+      alert(
+        "The projector window was blocked. Allow pop-ups and try again."
+      );
+    }
+  }
+
+  if (loading) {
+    return (
+      <main className="quiz-background flex min-h-screen items-center justify-center text-white">
+        Loading quiz...
+      </main>
+    );
+  }
+
+  if (!quiz) {
+    return (
+      <main className="quiz-background flex min-h-screen flex-col items-center justify-center gap-4 px-5 text-white">
+        <h1 className="brand-font text-3xl font-bold">
+          No quiz selected
+        </h1>
+
+        <p className="text-center text-purple-100/80">
+          Please return to Saved Quizzes and select a quiz.
+        </p>
+
+        <button
+          type="button"
+          onClick={() => navigate("/admin/quizzes")}
+          className="rounded-xl bg-[#91F0DF] px-5 py-3 font-bold text-[#31064D]"
+        >
+          BACK TO SAVED QUIZZES
+        </button>
+      </main>
+    );
+  }
+
+  return (
+    <HostDashboard
+      quiz={quiz}
+      onOpenProjector={handleOpenProjector}
+      onBack={() => navigate("/admin/quizzes")}
+      onStartQuiz={() => {
+        // HostDashboard updates the shared live state.
+      }}
+    />
+  );
+}
+
 function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // State for the original join flow.
+  // Participant join-flow state.
   const [pin, setPin] = useState("");
   const [nickname, setNickname] = useState("");
 
-  // State for the admin login prompt.
+  // Admin login prompt state.
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [pendingAction, setPendingAction] = useState("create");
 
@@ -57,7 +149,11 @@ function App() {
     }
 
     if (loggedIn) {
-      navigate("/admin/dashboard");
+      navigate(
+        tab === "CREATE"
+          ? "/admin/create"
+          : "/admin/quizzes"
+      );
       return;
     }
 
@@ -73,16 +169,16 @@ function App() {
     });
   }
 
-  // Original join flow: PIN -> nickname -> lobby.
+  // Participant flow: PIN -> nickname -> lobby.
   function handleJoin(gamePin) {
-  setPin(gamePin);
-  navigate("/nickname");
-}
+    setPin(gamePin);
+    navigate("/nickname");
+  }
 
-function handleContinue(name) {
-  setNickname(name);
-  navigate("/lobby");
-}
+  function handleContinue(name) {
+    setNickname(name);
+    navigate("/lobby");
+  }
 
   function handleLogout() {
     sessionStorage.removeItem("asterisAdminLoggedIn");
@@ -100,12 +196,12 @@ function handleContinue(name) {
     location.pathname === "/"
       ? "JOIN"
       : location.pathname.startsWith("/admin/create")
-      ? "CREATE"
-      : location.pathname === "/admin/quizzes" ||
-        location.pathname === "/admin/presentation" ||
-        location.pathname === "/stage"
-      ? "PRESENT"
-      : "";
+        ? "CREATE"
+        : location.pathname === "/admin/quizzes" ||
+            location.pathname === "/admin/presentation" ||
+            location.pathname === "/stage"
+          ? "PRESENT"
+          : "";
 
   const tabs = [
     {
@@ -128,7 +224,7 @@ function handleContinue(name) {
   return (
     <div className="quiz-background min-h-screen text-white">
       <Routes>
-        {/* Public home and original PIN entry. */}
+        {/* Public home and PIN entry. */}
         <Route
           path="/"
           element={
@@ -155,9 +251,13 @@ function handleContinue(name) {
                         key={tab.label}
                         type="button"
                         aria-current={
-                          activeTab === tab.label ? "page" : undefined
+                          activeTab === tab.label
+                            ? "page"
+                            : undefined
                         }
-                        onClick={() => handleTabChange(tab.label)}
+                        onClick={() =>
+                          handleTabChange(tab.label)
+                        }
                         className={`nav-font flex min-h-[44px] items-center justify-center rounded-xl border border-black/10 px-3 py-2 text-sm font-bold transition hover:-translate-y-0.5 hover:brightness-105 sm:min-w-[100px] sm:px-5 sm:text-base ${tab.color} ${tab.text} ${
                           activeTab === tab.label
                             ? "shadow-md ring-2 ring-white/60 ring-offset-2 ring-offset-[#260638]"
@@ -178,7 +278,7 @@ function handleContinue(name) {
           }
         />
 
-        {/* Original participant nickname page. */}
+        {/* Participant nickname page. */}
         <Route
           path="/nickname"
           element={
@@ -192,7 +292,7 @@ function handleContinue(name) {
           }
         />
 
-        {/* Original participant lobby. */}
+        {/* Participant waiting lobby. */}
         <Route
           path="/lobby"
           element={
@@ -222,7 +322,7 @@ function handleContinue(name) {
           element={<QuestionScreen />}
         />
 
-        {/* QR-based join flow. */}
+        {/* QR-based participant join flow. */}
         <Route
           path="/join"
           element={<JoinFlow />}
@@ -285,12 +385,12 @@ function handleContinue(name) {
           }
         />
 
-        {/* Presentation controls. */}
+        {/* Selected quiz: use the new HostDashboard design. */}
         <Route
           path="/admin/presentation"
           element={
             <AdminRoute>
-              <PresentationControlPage />
+              <HostDashboardRoute />
             </AdminRoute>
           }
         />

@@ -1,9 +1,8 @@
 
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 function AdminNav() {
   const navigate = useNavigate();
-  const location = useLocation();
 
   const navItems = [
     {
@@ -16,15 +15,13 @@ function AdminNav() {
       path: "/admin/quizzes",
       color: "bg-[#E6D99D] text-[#321044]",
     },
-    {
-      label: "JOIN",
-      path: "/",
-      color: "bg-[#91F0DF] text-[#17232A]",
-    },
   ];
 
   function handleLogout() {
     sessionStorage.removeItem("asterisAdminLoggedIn");
+    sessionStorage.removeItem("asterisAdminUsername");
+    sessionStorage.removeItem("asterisSelectedQuizId");
+
     navigate("/", { replace: true });
   }
 
@@ -32,28 +29,28 @@ function AdminNav() {
     <header className="mb-8 flex w-full flex-wrap items-center justify-between gap-5 border-b border-white/20 pb-5">
       <button
         type="button"
-        onClick={() => navigate("/admin/create")}
+        onClick={() => navigate("/admin/dashboard")}
         className="brand-font text-4xl font-bold text-white sm:text-5xl"
+        aria-label="Asteris admin dashboard"
       >
         Asteris
       </button>
 
-      <nav className="flex flex-wrap items-center gap-2">
+      <nav
+        aria-label="Admin navigation"
+        className="flex flex-wrap items-center gap-2"
+      >
         {navItems.map((item) => (
           <button
             key={item.label}
             type="button"
             onClick={() => navigate(item.path)}
-            aria-current={
-              location.pathname === item.path ? "page" : undefined
-            }
             className={`rounded-xl px-4 py-3 font-bold transition hover:-translate-y-0.5 hover:brightness-105 ${item.color}`}
           >
             {item.label}
           </button>
         ))}
 
-        
         <button
           type="button"
           onClick={handleLogout}

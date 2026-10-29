@@ -26,17 +26,11 @@ function AdminDashboardPage() {
       path: "/admin/quizzes",
       style: "bg-[#E6D99D] text-[#321044] hover:bg-[#F0E4AE]",
     },
-    {
-      label: "JOIN",
-      path: "/",
-      style: "bg-[#91F0DF] text-[#17232A] hover:bg-[#ACF7EA]",
-    },
   ];
 
   return (
     <main className="min-h-screen px-5 py-6 sm:px-8 lg:px-12">
       <div className="mx-auto w-full max-w-6xl">
-        {/* Dashboard header and navigation */}
         <header className="flex flex-col gap-5 border-b border-white/20 pb-6 sm:flex-row sm:items-center sm:justify-between">
           <button
             type="button"
@@ -71,7 +65,6 @@ function AdminDashboardPage() {
           </nav>
         </header>
 
-        {/* Welcome section */}
         <section className="py-12 sm:py-16">
           <p className="mb-3 text-sm font-bold uppercase tracking-[0.25em] text-[#91F0DF]">
             ADMIN WORKSPACE
@@ -83,8 +76,8 @@ function AdminDashboardPage() {
 
           <p className="mt-5 max-w-2xl text-base leading-7 text-white/85 sm:text-lg">
             Welcome to your Asteris control center. Create quizzes,
-            manage saved quizzes, or join a game using the navigation
-            above.
+            manage saved quizzes, and host live quiz events using
+            the navigation above.
           </p>
         </section>
       </div>

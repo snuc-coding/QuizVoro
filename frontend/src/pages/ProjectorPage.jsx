@@ -1,26 +1,22 @@
-
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
 import QuestionMedia from "../components/game/QuestionMedia";
+import Leaderboard from "../components/game/Leaderboard";
 
 const LIVE_STATE_KEY = "asterisLiveQuizState";
 const QUIZZES_KEY = "asterisQuizzes";
 const GAME_PIN_PREFIX = "asterisGamePin_";
 
 function generateGamePin() {
-  return String(
-    Math.floor(10000000 + Math.random() * 90000000)
-  );
+  return String(Math.floor(10000000 + Math.random() * 90000000));
 }
 
 function getOrCreateGamePin(quizId) {
   const storageKey = `${GAME_PIN_PREFIX}${quizId}`;
   let pin = localStorage.getItem(storageKey);
 
-  if (/^\d{8}$/.test(pin || "")) {
-    return pin;
-  }
+  if (/^\d{8}$/.test(pin || "")) return pin;
 
   pin = generateGamePin();
   localStorage.setItem(storageKey, pin);
@@ -36,7 +32,7 @@ function ProjectorPage() {
   const [error, setError] = useState("");
   const [timeLeft, setTimeLeft] = useState(0);
 
-  // Load the quiz and its saved Game PIN.
+  // Load the selected quiz and current live state.
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -60,6 +56,7 @@ function ProjectorPage() {
       }
 
       const pin = getOrCreateGamePin(selectedQuiz.id);
+
       setQuiz(selectedQuiz);
       setGamePin(pin);
 
@@ -71,16 +68,26 @@ function ProjectorPage() {
         savedState &&
         String(savedState.quizId) === String(selectedQuiz.id)
       ) {
-        setLiveState(savedState);
-      } else {
         setLiveState({
+          ...savedState,
+          gamePin: savedState.gamePin || pin,
+        });
+      } else {
+        const initialState = {
           quizId: selectedQuiz.id,
           gamePin: pin,
           status: "ready",
           currentQuestionIndex: 0,
           showLeaderboard: false,
+          leaderboard: [],
           updatedAt: Date.now(),
-        });
+        };
+
+        setLiveState(initialState);
+        localStorage.setItem(
+          LIVE_STATE_KEY,
+          JSON.stringify(initialState)
+        );
       }
     } catch (err) {
       console.error("Projector initialization failed:", err);
@@ -88,34 +95,30 @@ function ProjectorPage() {
     }
   }, []);
 
-  // Receive updates from the admin tab.
+  // Listen for host updates in another browser tab.
   useEffect(() => {
     function handleStorageChange(event) {
       if (event.key === QUIZZES_KEY && event.newValue) {
         try {
           const quizzes = JSON.parse(event.newValue);
-          const quizId = new URLSearchParams(
-            window.location.search
-          ).get("quizId");
+          const quizId =
+            new URLSearchParams(window.location.search).get("quizId") ||
+            sessionStorage.getItem("asterisSelectedQuizId");
 
           const updatedQuiz = quizzes.find(
             (item) => String(item.id) === String(quizId)
           );
 
-          if (updatedQuiz) {
-            setQuiz(updatedQuiz);
-          }
+          if (updatedQuiz) setQuiz(updatedQuiz);
         } catch (err) {
           console.error("Quiz update failed:", err);
         }
       }
 
-      if (event.key !== LIVE_STATE_KEY) return;
+      if (event.key !== LIVE_STATE_KEY || !event.newValue) return;
 
       try {
-        const updatedState = event.newValue
-          ? JSON.parse(event.newValue)
-          : null;
+        const updatedState = JSON.parse(event.newValue);
 
         if (
           updatedState &&
@@ -144,7 +147,7 @@ function ProjectorPage() {
   const question = quiz?.questions?.[questionIndex] ?? null;
   const status = liveState?.status ?? "ready";
 
-  // Reset the projector timer when the active question changes.
+  // Countdown timer for the current question.
   useEffect(() => {
     if (!question || status !== "running") {
       setTimeLeft(Number(question?.duration) || 15);
@@ -168,7 +171,9 @@ function ProjectorPage() {
           <h1 className="brand-font text-3xl font-bold">
             Projector unavailable
           </h1>
+
           <p className="mt-4">{error}</p>
+
           <button
             type="button"
             onClick={() => navigate("/admin/quizzes")}
@@ -189,36 +194,146 @@ function ProjectorPage() {
     );
   }
 
-  // Quiz ended screen.
-  if (status === "ended") {
+  const questions = quiz.questions;
+  const isLastQuestion = questionIndex >= questions.length - 1;
+
+  // Sort real scores when supplied by the host/backend.
+  const leaderboard = Array.isArray(liveState.leaderboard)
+    ? [...liveState.leaderboard]
+        .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+        .slice(0, 10)
+    : [];
+
+  const hasRealLeaderboard = leaderboard.length > 0;
+
+  const displayPlayers = hasRealLeaderboard
+    ? leaderboard.map((player, index) => ({
+        ...player,
+        id:
+          player.id ??
+          player.playerId ??
+          `${player.name || player.nickname || "player"}-${index}`,
+        name: player.name || player.nickname || `Player ${index + 1}`,
+        score: Number(player.score || 0),
+        rank: index + 1,
+      }))
+    : undefined;
+
+  // LEADERBOARD: check this before the results, lobby, and question screens.
+  if (liveState.showLeaderboard || status === "ended") {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-[#080710] px-5 text-center text-white">
-        <h1 className="brand-font text-5xl font-bold">Asteris!</h1>
-        <h2 className="mt-8 text-4xl font-black">Quiz ended</h2>
-        <p className="mt-4 text-purple-200">
-          Thank you for participating!
-        </p>
+      <Leaderboard
+        players={displayPlayers}
+        quizName={quiz.title || quiz.name || "Live Quiz"}
+        title={status === "ended" ? "Final Leaderboard" : "Leaderboard"}
+        isMock={!hasRealLeaderboard}
+      />
+    );
+  }
+
+  // Question results screen.
+  if (status === "results") {
+    const answeredCount =
+      liveState.answeredCount != null
+        ? Number(liveState.answeredCount)
+        : null;
+
+    const totalPlayers =
+      liveState.totalPlayers != null
+        ? Number(liveState.totalPlayers)
+        : null;
+
+    const hasAnswerStats =
+      answeredCount !== null &&
+      totalPlayers !== null &&
+      Number.isFinite(answeredCount) &&
+      Number.isFinite(totalPlayers) &&
+      totalPlayers > 0;
+
+    const responseRate = hasAnswerStats
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            Math.round((answeredCount / totalPlayers) * 100)
+          )
+        )
+      : null;
+
+    return (
+      <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#080710] px-5 py-10 text-white">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(100,45,150,0.25),transparent_65%)]"
+        />
+
+        <section className="relative z-10 w-full max-w-4xl">
+          <header className="text-center">
+            <p className="text-sm font-bold uppercase tracking-[0.25em] text-[#91F0DF]">
+              QUESTION {questionIndex + 1} RESULTS
+            </p>
+
+            <h1 className="brand-font mt-4 text-4xl font-bold sm:text-6xl">
+              Answers are in!
+            </h1>
+
+            <p className="mt-4 text-lg text-purple-200">
+              {question?.text ||
+                question?.question ||
+                question?.questionText ||
+                "Question results"}
+            </p>
+          </header>
+
+          <div className="mt-10 rounded-3xl bg-white p-6 text-center text-[#31064D] shadow-2xl sm:p-10">
+            {hasAnswerStats ? (
+              <>
+                <p className="text-sm font-bold uppercase tracking-widest text-gray-500">
+                  Players answered
+                </p>
+
+                <p className="mt-3 text-5xl font-black sm:text-7xl">
+                  {answeredCount}/{totalPlayers}
+                </p>
+
+                <p className="mt-3 text-3xl font-black text-emerald-700">
+                  {responseRate}% response rate
+                </p>
+
+                <div className="mt-6 h-4 overflow-hidden rounded-full bg-gray-200">
+                  <div
+                    className="h-full rounded-full bg-emerald-600 transition-all"
+                    style={{ width: `${responseRate}%` }}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-2xl font-bold">
+                  Question completed
+                </p>
+
+                <p className="mt-3 text-gray-600">
+                  Answer counts will appear when the host/backend supplies
+                  the response statistics.
+                </p>
+              </>
+            )}
+          </div>
+
+          <p className="mt-8 text-center text-purple-200">
+            {isLastQuestion
+              ? "The final leaderboard will appear when the host finishes the quiz."
+              : "The host is choosing the next step."}
+          </p>
+        </section>
       </main>
     );
   }
 
-  // Leaderboard screen.
-  if (liveState.showLeaderboard) {
-    return (
-      <main className="flex min-h-screen flex-col items-center bg-[#080710] px-5 py-12 text-white">
-        <h1 className="brand-font text-4xl font-bold">Asteris!</h1>
-        <h2 className="mt-8 text-3xl font-black">Leaderboard</h2>
-        <p className="mt-3 text-purple-200">
-          Participant scores will be connected later.
-        </p>
-      </main>
-    );
-  }
-
-  // Waiting lobby with QR code and eight-digit PIN.
+  // Lobby screen with PIN and QR code.
   if (status === "ready") {
-    const joinUrl =
-      `${window.location.origin}/join?pin=${encodeURIComponent(gamePin)}`;
+    const joinUrl = `${window.location.origin}/join?pin=${encodeURIComponent(gamePin)}`;
 
     return (
       <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#080710] px-5 py-10 text-white">
@@ -261,6 +376,7 @@ function ProjectorPage() {
               </div>
 
               <p className="mt-4 font-bold">SCAN TO JOIN</p>
+
               <p className="mt-2 max-w-xs text-sm text-purple-200">
                 Scan the QR code with your phone camera.
               </p>
@@ -311,6 +427,7 @@ function ProjectorPage() {
     0,
     Math.min(100, (timeLeft / duration) * 100)
   );
+
   const timerColor = timeLeft <= 5 ? "#FB4568" : "#E522E8";
 
   const hasMedia =
@@ -327,6 +444,7 @@ function ProjectorPage() {
     ["border-rose-400", "bg-rose-400/10", "bg-rose-400/20"],
   ];
 
+  // Live question screen.
   return (
     <main className="relative min-h-screen overflow-x-hidden bg-[#080710] text-white lg:h-dvh lg:min-h-0 lg:overflow-hidden">
       <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1920px] flex-col px-4 py-3 sm:px-6 lg:h-full lg:min-h-0 lg:px-8 xl:px-10">
@@ -335,6 +453,7 @@ function ProjectorPage() {
             <h1 className="brand-font text-3xl font-bold sm:text-4xl">
               Asteris!
             </h1>
+
             <p className="mt-1 text-xs tracking-[0.22em] text-purple-200 sm:text-sm">
               LIVE QUIZ · {quiz.title || quiz.name}
             </p>
@@ -344,6 +463,7 @@ function ProjectorPage() {
             <p className="text-xs tracking-wider text-purple-200">
               QUESTION
             </p>
+
             <p className="text-2xl font-black sm:text-3xl">
               {questionIndex + 1}
               <span className="mx-2 text-purple-400">/</span>
@@ -364,9 +484,13 @@ function ProjectorPage() {
               <p className="mb-3 text-sm font-bold uppercase tracking-wider text-purple-300">
                 Your question
               </p>
+
               <h2 className="text-2xl font-black leading-tight sm:text-3xl lg:text-4xl">
-                {question.text || question.question || question.questionText}
+                {question.text ||
+                  question.question ||
+                  question.questionText}
               </h2>
+
               <div className="mt-4 h-1 w-12 rounded-full bg-fuchsia-500" />
             </article>
 
@@ -394,6 +518,7 @@ function ProjectorPage() {
                   <p className="text-xs font-bold tracking-widest text-purple-200">
                     TIME LEFT
                   </p>
+
                   <p
                     className={`text-4xl font-black ${
                       timeLeft <= 5 ? "text-rose-400" : "text-white"
@@ -435,6 +560,7 @@ function ProjectorPage() {
                       >
                         {String.fromCharCode(65 + index)}
                       </span>
+
                       <span className="break-words font-bold">
                         {optionText}
                       </span>
