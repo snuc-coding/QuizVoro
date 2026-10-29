@@ -1,11 +1,11 @@
+
 import { useCallback, useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { submitMockAnswer } from "../services/questionService";
-import AnswerResultsChart from "../components/game/AnswerResultsChart";
+import Leaderboard from "../components/game/Leaderboard";
 
 const LIVE_STATE_KEY = "asterisLiveQuizState";
 const QUIZZES_KEY = "asterisQuizzes";
-const DEMO_VOTES = [10, 20, 55, 15];
 
 const optionColors = [
   {
@@ -57,10 +57,18 @@ function getCorrectOptionIndex(question, options) {
     question?.correctAnswerIndex ??
     question?.correctIndex;
 
-  if (indexValue !== undefined && indexValue !== null && indexValue !== "") {
+  if (
+    indexValue !== undefined &&
+    indexValue !== null &&
+    indexValue !== ""
+  ) {
     const index = Number(indexValue);
 
-    if (Number.isInteger(index) && index >= 0 && index < options.length) {
+    if (
+      Number.isInteger(index) &&
+      index >= 0 &&
+      index < options.length
+    ) {
       return index;
     }
   }
@@ -87,7 +95,10 @@ function getCorrectOptionIndex(question, options) {
 
   if (/^[A-Z]$/i.test(answerText)) {
     const index = answerText.toUpperCase().charCodeAt(0) - 65;
-    if (index >= 0 && index < options.length) return index;
+
+    if (index >= 0 && index < options.length) {
+      return index;
+    }
   }
 
   return options.findIndex(
@@ -111,6 +122,7 @@ function QuestionScreen() {
   const loadQuiz = useCallback(() => {
     const params = new URLSearchParams(location.search);
     const requestedQuizId = params.get("quizId");
+
     const savedQuizzes = readJSON(QUIZZES_KEY, []);
     const savedLiveState = readJSON(LIVE_STATE_KEY, null);
 
@@ -127,7 +139,9 @@ function QuestionScreen() {
       sessionStorage.getItem("asterisSelectedQuizId");
 
     let selectedQuiz = quizId
-      ? savedQuizzes.find((item) => String(item.id) === String(quizId))
+      ? savedQuizzes.find(
+          (item) => String(item.id) === String(quizId)
+        )
       : null;
 
     if (!selectedQuiz && !requestedQuizId) {
@@ -185,7 +199,10 @@ function QuestionScreen() {
     };
   }, [loadQuiz]);
 
-  const questions = Array.isArray(quiz?.questions) ? quiz.questions : [];
+  const questions = Array.isArray(quiz?.questions)
+    ? quiz.questions
+    : [];
+
   const questionIndex = liveState?.currentQuestionIndex ?? 0;
   const question = questions[questionIndex] || null;
   const duration = Math.max(1, Number(question?.duration) || 20);
@@ -198,6 +215,8 @@ function QuestionScreen() {
     setError("");
   }, [questionIndex, duration, quiz?.id]);
 
+  // The timer stops when the host changes the game state.
+  // Timer expiry does not automatically advance the question.
   useEffect(() => {
     if (
       liveState?.status !== "running" ||
@@ -239,7 +258,9 @@ function QuestionScreen() {
       if (result?.success) {
         setSubmitted(true);
       } else {
-        setError("Your answer could not be submitted. Please try again.");
+        setError(
+          "Your answer could not be submitted. Please try again."
+        );
       }
     } catch (err) {
       console.error("Answer submission failed:", err);
@@ -254,6 +275,7 @@ function QuestionScreen() {
       <main className="flex min-h-screen items-center justify-center bg-[#080710] px-4 text-white">
         <div className="max-w-md text-center">
           <p className="mb-4 text-rose-300">{error}</p>
+
           <button
             type="button"
             onClick={loadQuiz}
@@ -274,39 +296,36 @@ function QuestionScreen() {
     );
   }
 
-  // Show the leaderboard before the ended screen.
+  // Use the existing separate Leaderboard component.
+  // It displays MOCK_PLAYERS by default until real data is integrated.
   if (liveState.showLeaderboard) {
     return (
-      <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#080710] px-4 py-8 text-center text-white">
-        <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-purple-700/25 blur-[100px]" />
-        <div className="pointer-events-none absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-violet-800/25 blur-[100px]" />
-
-        <section className="relative w-full max-w-xl rounded-3xl border border-purple-400/20 bg-[#15121E]/90 p-8 shadow-2xl sm:p-12">
-          <h1 className="brand-font mb-6 text-4xl">Asteris!</h1>
-          <div className="mb-5 text-4xl">🏆</div>
-          <p className="text-xs font-bold uppercase tracking-[0.25em] text-[#91F0DF]">
-            QUIZ LEADERBOARD
-          </p>
-          <h2 className="mt-3 text-3xl font-extrabold">Leaderboard</h2>
-          <p className="mt-4 text-purple-200">
-            The host is showing the leaderboard.
-          </p>
-          <p className="mt-2 text-sm text-purple-300">
-            Scores will appear when score tracking is connected.
-          </p>
-        </section>
-      </main>
+      <Leaderboard
+        quizName={quiz.title || quiz.name || "Asteris Quiz"}
+        title={
+          liveState.status === "ended"
+            ? "Final Leaderboard"
+            : "Leaderboard"
+        }
+      />
     );
   }
 
+  // Show the completed screen only when the leaderboard is not visible.
   if (liveState.status === "ended") {
     return (
       <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#080710] px-4 py-8 text-center text-white">
         <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-purple-700/25 blur-[100px]" />
+
         <section className="relative w-full max-w-xl rounded-3xl border border-purple-400/20 bg-[#15121E]/90 p-10 shadow-2xl">
           <h1 className="brand-font mb-6 text-4xl">Asteris!</h1>
+
           <div className="mb-5 text-4xl">🏆</div>
-          <h2 className="text-3xl font-extrabold">Quiz completed!</h2>
+
+          <h2 className="text-3xl font-extrabold">
+            Quiz completed!
+          </h2>
+
           <p className="mt-4 text-purple-200">
             Thanks for participating.
           </p>
@@ -317,14 +336,20 @@ function QuestionScreen() {
 
   const isResults = liveState.status === "results";
   const isReady = liveState.status === "ready";
-  const isWaiting = !isReady && !isResults && liveState.status !== "running";
+  const isWaiting =
+    !isReady &&
+    !isResults &&
+    liveState.status !== "running";
 
-  // Keep the player in a stable waiting state during host transitions.
+  // During transitions, wait for the host's next state.
   if (isResults || isReady || isWaiting) {
-    const isLastQuestion = questionIndex >= questions.length - 1;
+    const isLastQuestion =
+      questionIndex >= questions.length - 1;
 
     let title = "Get ready!";
-    let message = `${quiz.title || quiz.name || "Your quiz"} will begin when the host starts.`;
+    let message = `${
+      quiz.title || quiz.name || "Your quiz"
+    } will begin when the host starts.`;
 
     if (isResults) {
       title = isLastQuestion
@@ -336,12 +361,14 @@ function QuestionScreen() {
         : "The host is choosing the next step. Keep this page open.";
     } else if (isWaiting) {
       title = "Waiting for the host...";
-      message = "The host is preparing the next part of the quiz. Keep this page open.";
+      message =
+        "The host is preparing the next part of the quiz. Keep this page open.";
     }
 
     return (
       <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#080710] px-4 py-8 text-white">
         <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-purple-700/25 blur-[100px]" />
+
         <div className="pointer-events-none absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-violet-800/25 blur-[100px]" />
 
         <section className="relative w-full max-w-xl rounded-3xl border border-purple-400/20 bg-[#15121E]/90 p-8 text-center shadow-2xl sm:p-12">
@@ -357,11 +384,18 @@ function QuestionScreen() {
             {isResults ? "QUESTION COMPLETED" : "PLEASE WAIT"}
           </p>
 
-          <h2 className="text-2xl font-extrabold sm:text-3xl">{title}</h2>
+          <h2 className="text-2xl font-extrabold sm:text-3xl">
+            {title}
+          </h2>
 
-          <p className="mt-4 leading-7 text-purple-200">{message}</p>
+          <p className="mt-4 leading-7 text-purple-200">
+            {message}
+          </p>
 
-          <div className="mt-8 flex justify-center gap-2" aria-label="Waiting">
+          <div
+            className="mt-8 flex justify-center gap-2"
+            aria-label="Waiting"
+          >
             <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[#91F0DF]" />
             <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-purple-400 [animation-delay:150ms]" />
             <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-fuchsia-400 [animation-delay:300ms]" />
@@ -382,9 +416,15 @@ function QuestionScreen() {
     );
   }
 
-  const rawOptions = Array.isArray(question.options) ? question.options : [];
+  const rawOptions = Array.isArray(question.options)
+    ? question.options
+    : [];
+
   const options = rawOptions.map(getOptionText);
-  const correctOptionIndex = getCorrectOptionIndex(question, rawOptions);
+  const correctOptionIndex = getCorrectOptionIndex(
+    question,
+    rawOptions
+  );
 
   const isAnswerCorrect =
     submitted &&
@@ -406,25 +446,13 @@ function QuestionScreen() {
         ? "border-lime-400/30 bg-lime-400/10 text-lime-300"
         : "border-rose-400/30 bg-rose-400/10 text-rose-300";
 
-  const chartOptions = options.map((text, index) => ({
-    id: `${question.id ?? questionIndex}-${index}`,
-    label: String.fromCharCode(65 + index),
-    text,
-    votes: DEMO_VOTES[index] ?? 0,
-    isCorrect: correctOptionIndex === index,
-  }));
-
-  const demoTotalAnswers = chartOptions.reduce(
-    (sum, option) => sum + option.votes,
-    0
-  );
-
   const timerPercentage = Math.max(
     0,
     Math.min(100, (timeLeft / duration) * 100)
   );
 
-  const timerColor = timeLeft <= 5 ? "#FB4568" : "#D946EF";
+  const timerColor =
+    timeLeft <= 5 ? "#FB4568" : "#D946EF";
 
   return (
     <main className="relative flex min-h-screen w-full justify-center overflow-hidden bg-[#080710] px-4 py-6 text-white sm:items-center">
@@ -432,6 +460,7 @@ function QuestionScreen() {
         aria-hidden="true"
         className="pointer-events-none absolute -left-32 -top-24 h-80 w-80 rounded-full bg-purple-700/30 blur-[100px]"
       />
+
       <div
         aria-hidden="true"
         className="pointer-events-none absolute -bottom-32 -right-24 h-96 w-96 rounded-full bg-violet-800/30 blur-[110px]"
@@ -442,6 +471,7 @@ function QuestionScreen() {
           <h1 className="brand-font text-3xl text-white sm:text-4xl">
             Asteris!
           </h1>
+
           <span
             aria-hidden="true"
             className="flex h-12 w-12 items-center justify-center rounded-2xl border border-purple-300/25 bg-white/5 text-2xl text-purple-100"
@@ -454,6 +484,7 @@ function QuestionScreen() {
           <span className="font-semibold tracking-wide text-purple-200">
             QUESTION {questionIndex + 1} / {questions.length}
           </span>
+
           <span className="rounded-full border border-purple-300/15 bg-purple-500/15 px-3 py-1 text-center text-purple-200">
             {timeLeft === 0
               ? "Time is up!"
@@ -469,6 +500,7 @@ function QuestionScreen() {
           <p className="mb-3 text-xs font-bold uppercase tracking-[0.2em] text-purple-300">
             Your question
           </p>
+
           <h2 className="text-2xl font-extrabold leading-snug sm:text-3xl">
             {question.text ||
               question.question ||
@@ -483,9 +515,12 @@ function QuestionScreen() {
               <span className="text-xs font-bold tracking-[0.18em] text-purple-200">
                 TIME LEFT
               </span>
+
               <span
                 className={`text-2xl font-black tabular-nums ${
-                  timeLeft <= 5 ? "text-rose-400" : "text-white"
+                  timeLeft <= 5
+                    ? "text-rose-400"
+                    : "text-white"
                 }`}
                 role="timer"
               >
@@ -526,7 +561,9 @@ function QuestionScreen() {
 
             <div className="grid grid-cols-2 gap-3">
               {options.map((option, index) => {
-                const colors = optionColors[index % optionColors.length];
+                const colors =
+                  optionColors[index % optionColors.length];
+
                 const isSelected = selectedOption === index;
 
                 return (
@@ -547,6 +584,7 @@ function QuestionScreen() {
                     >
                       {String.fromCharCode(65 + index)}
                     </span>
+
                     <span
                       className={`text-center text-base font-extrabold sm:text-lg ${colors.text}`}
                     >
@@ -580,7 +618,9 @@ function QuestionScreen() {
             <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-purple-500/15 text-2xl">
               ⏳
             </div>
+
             <h2 className="text-xl font-extrabold">Time is up!</h2>
+
             <p className="mt-2 text-purple-200">
               Waiting for the host to show the results or continue.
             </p>
@@ -597,7 +637,10 @@ function QuestionScreen() {
         )}
 
         {error && (
-          <p role="alert" className="mt-3 text-center text-sm text-rose-300">
+          <p
+            role="alert"
+            className="mt-3 text-center text-sm text-rose-300"
+          >
             {error}
           </p>
         )}
