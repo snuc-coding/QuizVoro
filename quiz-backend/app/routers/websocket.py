@@ -1,7 +1,6 @@
 """
 websocket.py — Real-time WebSocket endpoints for Host, Participant, and Stage Display.
 
-Developer 3: WebSocket route handlers.
 Endpoints:
   /api/v1/ws/games/{gameId}/host         admin: control game, receive real-time updates
   /api/v1/ws/games/{gameId}/participant  player: receive question & leaderboard updates
@@ -12,11 +11,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
-import jwt
-from sqlalchemy.orm import Session
 
-from app.database import get_db
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
+
+from app.database import SessionLocal
 from app.game_schemas import AnswerIn
 from app.models import Admin, GameParticipant
 from app.security import decode_access_token
@@ -37,6 +36,50 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+async def _db_call(fn, *args):
+    """Run fn(db, *args) in a worker thread with a short-lived session.
+
+    Keeps blocking SQLAlchemy calls off the event loop and releases the
+    connection as soon as fn returns. fn must return plain values.
+    """
+    def _inner():
+        with SessionLocal() as db:
+            return fn(db, *args)
+    return await run_in_threadpool(_inner)
+
+
+# ── Sync helpers (run in threadpool) ──────────────────────────────────────────
+
+def _auth_host(db, admin_id: int, game_id: int) -> None:
+    admin = db.get(Admin, admin_id)
+    if not admin or not admin.is_active:
+        raise PermissionError("Admin account disabled or not found")
+    participant_service.get_game_for_admin(db, game_id, admin)
+
+
+def _auth_participant(db, token: str, game_id: int):
+    membership = participant_service.get_participant_by_token(db, token)
+    if membership.game_id != game_id or not membership.is_active:
+        raise PermissionError("Removed or not in this game")
+    return membership.id, membership.participant.nickname
+
+
+def _check_stage_game(db, game_id: int) -> None:
+    participant_service.get_game_by_id(db, game_id)
+
+
+def _count_active(db, game_id: int) -> int:
+    return len(participant_service.active_players(db, game_id))
+
+
+def _submit_answer(db, game_id: int, participant_id: int, answer_in: AnswerIn) -> dict:
+    membership = db.get(GameParticipant, participant_id)
+    if not membership:
+        raise ValueError("Participant membership no longer exists")
+    ack = answer_service.submit_answer(db, game_id, membership, answer_in)
+    return ack.model_dump(mode="json")
+
+
 # ── Host WebSocket Endpoint ───────────────────────────────────────────────────
 
 @router.websocket("/{gameId}/host")
@@ -44,13 +87,11 @@ async def host_websocket_endpoint(
     websocket: WebSocket,
     gameId: int,
     token: str = Query(..., description="Admin JWT Bearer access token."),
-    db: Session = Depends(get_db),
 ):
     """
     Authenticated WebSocket connection for the game host.
     Requires valid admin JWT and quiz ownership.
     """
-    # 1. Authenticate Admin
     try:
         payload = decode_access_token(token)
         admin_id_str = payload.get("sub")
@@ -62,19 +103,12 @@ async def host_websocket_endpoint(
         await websocket.close(code=4003, reason="Could not validate credentials")
         return
 
-    admin = db.get(Admin, admin_id)
-    if not admin or not admin.is_active:
-        await websocket.close(code=4003, reason="Admin account disabled or not found")
-        return
-
-    # 2. Verify Game Ownership
     try:
-        participant_service.get_game_for_admin(db, gameId, admin)
+        await _db_call(_auth_host, admin_id, gameId)
     except Exception:
         await websocket.close(code=4003, reason="Forbidden: Not the quiz owner")
         return
 
-    # 3. Accept Connection
     await websocket.accept()
     await manager.connect_host(gameId, websocket)
 
@@ -93,32 +127,39 @@ async def host_websocket_endpoint(
 
             action_upper = str(action).upper()
             try:
-                if action_upper == HostAction.START.value:
-                    await orchestrator.start_game(db, gameId, admin)
-                elif action_upper == HostAction.NEXT_QUESTION.value:
-                    await orchestrator.next_question(db, gameId, admin)
-                elif action_upper == HostAction.PAUSE.value:
-                    await orchestrator.pause_game(db, gameId, admin)
-                elif action_upper == HostAction.RESUME.value:
-                    await orchestrator.resume_game(db, gameId, admin)
-                elif action_upper == HostAction.REVEAL.value:
-                    await orchestrator.reveal_answer(db, gameId, admin)
-                elif action_upper == HostAction.END.value:
-                    await orchestrator.end_game(db, gameId, admin)
-                elif action_upper == HostAction.KICK.value:
-                    participant_id = data.get("participant_id")
-                    if participant_id:
-                        await orchestrator.kick_participant(db, gameId, int(participant_id), admin)
+                # Orchestrator methods are async and take a session, so the
+                # session must live on the event loop for the duration of the
+                # action only.
+                with SessionLocal() as action_db:
+                    action_admin = action_db.get(Admin, admin_id)
+                    if not action_admin or not action_admin.is_active:
+                        raise ValueError("Admin account disabled or not found")
+                    if action_upper == HostAction.START.value:
+                        await orchestrator.start_game(action_db, gameId, action_admin)
+                    elif action_upper == HostAction.NEXT_QUESTION.value:
+                        await orchestrator.next_question(action_db, gameId, action_admin)
+                    elif action_upper == HostAction.PAUSE.value:
+                        await orchestrator.pause_game(action_db, gameId, action_admin)
+                    elif action_upper == HostAction.RESUME.value:
+                        await orchestrator.resume_game(action_db, gameId, action_admin)
+                    elif action_upper == HostAction.REVEAL.value:
+                        await orchestrator.reveal_answer(action_db, gameId, action_admin)
+                    elif action_upper == HostAction.END.value:
+                        await orchestrator.end_game(action_db, gameId, action_admin)
+                    elif action_upper == HostAction.KICK.value:
+                        participant_id = data.get("participant_id")
+                        if participant_id:
+                            await orchestrator.kick_participant(action_db, gameId, int(participant_id), action_admin)
+                        else:
+                            await websocket.send_json({
+                                "event": EventType.ERROR.value,
+                                "data": {"detail": "participant_id required for KICK action"},
+                            })
                     else:
                         await websocket.send_json({
                             "event": EventType.ERROR.value,
-                            "data": {"detail": "participant_id required for KICK action"},
+                            "data": {"detail": f"Unknown action '{action}'"},
                         })
-                else:
-                    await websocket.send_json({
-                        "event": EventType.ERROR.value,
-                        "data": {"detail": f"Unknown action '{action}'"},
-                    })
             except Exception as exc:
                 detail = getattr(exc, "detail", str(exc))
                 await websocket.send_json({
@@ -140,33 +181,27 @@ async def participant_websocket_endpoint(
     websocket: WebSocket,
     gameId: int,
     token: str = Query(..., description="Participant token returned on join/rejoin."),
-    db: Session = Depends(get_db),
 ):
     """
     Authenticated WebSocket connection for live players.
     Requires valid participant token. Enforces answer secrecy and data isolation.
     """
-    # 1. Authenticate Participant
     try:
-        membership = participant_service.get_participant_by_token(db, token)
+        participant_id, nickname = await _db_call(_auth_participant, token, gameId)
     except Exception:
         await websocket.close(code=4003, reason="Invalid participant token")
         return
 
-    # 2. Verify Membership in this game
-    if membership.game_id != gameId or not membership.is_active:
-        await websocket.close(code=4003, reason="Forbidden: Removed or not in this game")
-        return
-
-    # 3. Accept Connection
     await websocket.accept()
-    await manager.connect_participant(gameId, membership.id, websocket)
+    await manager.connect_participant(gameId, participant_id, websocket)
 
-    # Broadcast player joined to room
-    total_active = len(participant_service.active_players(db, gameId))
-    await orchestrator.broadcast_player_joined(
-        gameId, membership.id, membership.participant.nickname, total_active
-    )
+    try:
+        total_active = await _db_call(_count_active, gameId)
+        await orchestrator.broadcast_player_joined(
+            gameId, participant_id, nickname, total_active
+        )
+    except Exception as exc:
+        logger.error(f"Participant join broadcast error: {exc}")
 
     try:
         while True:
@@ -181,13 +216,10 @@ async def participant_websocket_endpoint(
                 try:
                     payload = data.get("data", {})
                     answer_in = AnswerIn(**payload)
-                    ack = answer_service.submit_answer(db, gameId, membership, answer_in)
-                    await websocket.send_json({
-                        "event": "ANSWER_ACK",
-                        "data": ack.model_dump(mode="json"),
-                    })
-                    # Broadcast updated count to host and stage
-                    await orchestrator.broadcast_answer_count(db, gameId, answer_in.question_id)
+                    ack = await _db_call(_submit_answer, gameId, participant_id, answer_in)
+                    await websocket.send_json({"event": "ANSWER_ACK", "data": ack})
+                    with SessionLocal() as answer_db:
+                        await orchestrator.broadcast_answer_count(answer_db, gameId, answer_in.question_id)
                 except Exception as exc:
                     detail = getattr(exc, "detail", str(exc))
                     await websocket.send_json({
@@ -196,7 +228,6 @@ async def participant_websocket_endpoint(
                     })
                 continue
 
-            # Security: If a participant attempts to send a host command, reject it
             if "action" in data:
                 await websocket.send_json({
                     "event": EventType.ERROR.value,
@@ -204,14 +235,17 @@ async def participant_websocket_endpoint(
                 })
 
     except WebSocketDisconnect:
-        await manager.disconnect_participant(gameId, membership.id, websocket)
-        total_left = len(participant_service.active_players(db, gameId))
-        await orchestrator.broadcast_player_left(
-            gameId, membership.id, total_left, membership.participant.nickname
-        )
+        await manager.disconnect_participant(gameId, participant_id, websocket)
+        try:
+            total_left = await _db_call(_count_active, gameId)
+            await orchestrator.broadcast_player_left(
+                gameId, participant_id, total_left, nickname
+            )
+        except Exception as exc:
+            logger.error(f"Participant leave broadcast error: {exc}")
     except Exception as exc:
         logger.error(f"Participant websocket error: {exc}")
-        await manager.disconnect_participant(gameId, membership.id, websocket)
+        await manager.disconnect_participant(gameId, participant_id, websocket)
 
 
 # ── Stage Display WebSocket Endpoint ──────────────────────────────────────────
@@ -221,26 +255,22 @@ async def stage_websocket_endpoint(
     websocket: WebSocket,
     gameId: int,
     token: str = Query(..., description="Cryptographically signed stage display token."),
-    db: Session = Depends(get_db),
 ):
     """
     Stage Display WebSocket connection for public venue screens.
     Enforces strong authentication via signed stage token.
     Enforces read-only behavior: all incoming command messages are rejected/ignored.
     """
-    # 1. Validate Stage Token
     if not verify_stage_token(token, gameId):
         await websocket.close(code=4003, reason="Forbidden: Invalid stage display token")
         return
 
-    # 2. Verify Game Exists
     try:
-        participant_service.get_game_by_id(db, gameId)
+        await _db_call(_check_stage_game, gameId)
     except Exception:
         await websocket.close(code=4004, reason="Game not found")
         return
 
-    # 3. Accept Connection
     await websocket.accept()
     await manager.connect_stage(gameId, websocket)
 
@@ -253,7 +283,6 @@ async def stage_websocket_endpoint(
                 await websocket.send_json({"event": EventType.PONG.value, "timestamp": _now().isoformat()})
                 continue
 
-            # Stage screen is strictly read-only
             await websocket.send_json({
                 "event": EventType.ERROR.value,
                 "data": {"detail": "Stage display is read-only. Control commands are rejected."},

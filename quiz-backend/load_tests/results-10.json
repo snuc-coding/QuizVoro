@@ -1,0 +1,20 @@
+{
+  "timestamp_utc": "2026-10-30T04:22:03.307017+00:00",
+  "base_url": "http://127.0.0.1:8000",
+  "game_id": 25,
+  "requested_clients": 10,
+  "joined": 10,
+  "connected": 10,
+  "connection_success_rate_pct": 100.0,
+  "connection_time_ms_avg": 17.65,
+  "connection_time_ms_p95": 26.49,
+  "question_started_delivered": 10,
+  "broadcast_delivery_rate_pct": 100.0,
+  "broadcast_latency_ms_avg": 85.73,
+  "broadcast_latency_ms_p95": 87.12,
+  "unexpected_disconnects": 0,
+  "server_cpu_pct_avg": null,
+  "server_rss_mb_max": null,
+  "elapsed_seconds": 30.01,
+  "errors": []
+}
