@@ -1,0 +1,143 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Lakki+Reddy&family=Londrina+Solid:wght@300;400;900&display=swap');
+@import "tailwindcss";
+
+/* Brand typography */
+.brand-font {
+  font-family: 'Lakki Reddy', cursive;
+}
+
+.nav-font {
+  font-family: 'Londrina Solid', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: Arial, sans-serif;
+}
+
+/* Base background */
+.quiz-background {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(
+      ellipse at 50% 45%,
+      #4b176b 0%,
+      #38104f 42%,
+      #260536 100%
+    );
+}
+
+/* Animated glow layers */
+background:
+  radial-gradient(
+    ellipse at 50% 45%,
+    #4b176b 0%,
+    #38104f 42%,
+    #260536 100%
+  );
+
+/* Violet glow travelling across the page */
+.quiz-background::before {
+  width: 75vw;
+  height: 75vw;
+  min-width: 520px;
+  min-height: 520px;
+  top: -35%;
+  left: -20%;
+
+  background: radial-gradient(
+    circle,
+    rgba(151, 65, 255, 0.52) 0%,
+    rgba(112, 35, 185, 0.30) 35%,
+    rgba(77, 15, 112, 0.12) 55%,
+    transparent 72%
+  );
+
+  filter: blur(35px);
+  animation: violet-drift 12s ease-in-out infinite alternate;
+}
+
+/* Cyan-violet glow travelling from the opposite side */
+.quiz-background::after {
+  width: 70vw;
+  height: 70vw;
+  min-width: 480px;
+  min-height: 480px;
+  right: -18%;
+  bottom: -38%;
+
+  background: radial-gradient(
+    circle,
+    rgba(102, 72, 255, 0.36) 0%,
+    rgba(104, 43, 175, 0.24) 38%,
+    rgba(74, 20, 112, 0.12) 56%,
+    transparent 73%
+  );
+
+  filter: blur(45px);
+  animation: purple-drift 16s ease-in-out infinite alternate;
+}
+
+/* Continuous movement */
+@keyframes violet-drift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(0.9);
+    opacity: 0.65;
+  }
+
+  50% {
+    transform: translate3d(22vw, 18vh, 0) scale(1.12);
+    opacity: 1;
+  }
+
+  100% {
+    transform: translate3d(10vw, 30vh, 0) scale(1);
+    opacity: 0.78;
+  }
+}
+
+@keyframes purple-drift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.65;
+  }
+
+  50% {
+    transform: translate3d(-18vw, -15vh, 0) scale(1.15);
+    opacity: 1;
+  }
+
+  100% {
+    transform: translate3d(-28vw, -5vh, 0) scale(0.92);
+    opacity: 0.75;
+  }
+}
+
+/* Keyboard accessibility */
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid #a99aff;
+  outline-offset: 3px;
+}
+
+/* Respect reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .quiz-background::before,
+  .quiz-background::after {
+    animation: none;
+  }
+}

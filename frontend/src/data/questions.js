@@ -1,0 +1,43 @@
+
+export const dummyQuestions = [
+  {
+    id: "q1",
+    number: 1,
+    total: 4,
+    text: "What is the animal in the picture ?",
+    mediaType: "image",
+    mediaUrl: "/media/turtle.jpg",
+    duration: 15,
+    options: ["Turtle", "Cheetah", "Rabbit", "Leopard"],
+  },
+  {
+    id: "q2",
+    number: 2,
+    total: 4,
+    text: "Identify the sound.",
+    mediaType: "audio",
+    mediaUrl: "/media/animal-sound.mp3",
+    duration: 20,
+    options: ["Lion", "Elephant", "Dog", "Horse"],
+  },
+  {
+  id: "q3",
+  number: 3,
+  total: 4,
+  text: "Which animal appears in the video?",
+  mediaType: "youtube",
+  mediaUrl: "https://youtu.be/O1ogQr87VJI?si=ZdahwFLJZMmE4oml",
+  duration: 30,
+  options: ["Tiger", "Zebra", "Deer", "Bear"],
+},
+  {
+    id: "q4",
+    number: 4,
+    total: 4,
+    text: "Which planet is known as the Red Planet?",
+    mediaType: "text",
+    mediaUrl: null,
+    duration: 15,
+    options: ["Venus", "Mars", "Jupiter", "Mercury"],
+  },
+];
