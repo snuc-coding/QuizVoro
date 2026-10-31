@@ -1,17 +1,14 @@
-
 import { useNavigate } from "react-router-dom";
+import { getAdminUsername, clearAdminToken } from "../services/api";
 
 function AdminDashboardPage() {
   const navigate = useNavigate();
 
-  const username =
-    sessionStorage.getItem("asterisAdminUsername") || "admin";
+  const username = getAdminUsername();
 
   function handleLogout() {
-    sessionStorage.removeItem("asterisAdminLoggedIn");
-    sessionStorage.removeItem("asterisAdminUsername");
+    clearAdminToken();
     sessionStorage.removeItem("asterisSelectedQuizId");
-
     navigate("/", { replace: true });
   }
 

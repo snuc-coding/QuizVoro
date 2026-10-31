@@ -1,0 +1,6 @@
+# Local database files
+*.db
+*.sqlite3
+
+# Temporary debugging scripts
+debug_pin.py

@@ -1,0 +1,479 @@
+[
+    {
+        "endpoint":  "/admin/login",
+        "method":  "POST",
+        "scenario":  "Valid admin login",
+        "expected":  "200 with JWT token",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/admin/login",
+        "method":  "POST",
+        "scenario":  "Invalid password login",
+        "expected":  "401 Unauthorized",
+        "actual":  "401",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/admin/login",
+        "method":  "POST",
+        "scenario":  "Nonexistent user login",
+        "expected":  "401 Unauthorized",
+        "actual":  "401",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/admin/login",
+        "method":  "POST",
+        "scenario":  "Missing password in login body",
+        "expected":  "422 Validation Error",
+        "actual":  "422",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/admin/me",
+        "method":  "GET",
+        "scenario":  "Access protected admin profile with valid JWT",
+        "expected":  "200 OK",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/admin/me",
+        "method":  "GET",
+        "scenario":  "Access protected admin profile without JWT",
+        "expected":  "403 Forbidden",
+        "actual":  "403",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/admin/me",
+        "method":  "GET",
+        "scenario":  "Access protected admin profile with invalid JWT",
+        "expected":  "401 Unauthorized",
+        "actual":  "401",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes",
+        "method":  "POST",
+        "scenario":  "Create valid quiz",
+        "expected":  "201 Created",
+        "actual":  "201",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes",
+        "method":  "POST",
+        "scenario":  "Create quiz missing title",
+        "expected":  "422 Validation Error",
+        "actual":  "422",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes",
+        "method":  "POST",
+        "scenario":  "Create quiz with empty whitespace title",
+        "expected":  "422 Validation Error",
+        "actual":  "422",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes",
+        "method":  "GET",
+        "scenario":  "List admin quizzes",
+        "expected":  "200 OK with list",
+        "actual":  "200 (count=1)",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes/{quizId}",
+        "method":  "GET",
+        "scenario":  "Get quiz detail",
+        "expected":  "200 OK",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes/{quizId}",
+        "method":  "GET",
+        "scenario":  "Get nonexistent quiz",
+        "expected":  "404 Not Found",
+        "actual":  "404",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes/{quizId}",
+        "method":  "PATCH",
+        "scenario":  "Update quiz title",
+        "expected":  "200 OK",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes/{quizId}/rounds",
+        "method":  "POST",
+        "scenario":  "Add round 1",
+        "expected":  "201 Created",
+        "actual":  "201",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes/{quizId}/rounds",
+        "method":  "POST",
+        "scenario":  "Add duplicate round number in same quiz",
+        "expected":  "409 Conflict",
+        "actual":  "409",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes/{quizId}/rounds",
+        "method":  "POST",
+        "scenario":  "Add round with round_number \u003c 1",
+        "expected":  "422 Validation Error",
+        "actual":  "422",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes/{quizId}/rounds",
+        "method":  "POST",
+        "scenario":  "Add round 2",
+        "expected":  "201 Created",
+        "actual":  "201",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/quizzes/{quizId}/rounds",
+        "method":  "GET",
+        "scenario":  "List rounds for quiz",
+        "expected":  "200 OK",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}",
+        "method":  "GET",
+        "scenario":  "Get round detail",
+        "expected":  "200 OK",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}",
+        "method":  "GET",
+        "scenario":  "Get nonexistent round",
+        "expected":  "404 Not Found",
+        "actual":  "404",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}",
+        "method":  "PATCH",
+        "scenario":  "Update round title",
+        "expected":  "200 OK",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}/questions",
+        "method":  "POST",
+        "scenario":  "Create valid MCQ question",
+        "expected":  "201 Created",
+        "actual":  "201",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}/questions",
+        "method":  "POST",
+        "scenario":  "Question with \u003c 2 options",
+        "expected":  "422 Validation Error",
+        "actual":  "422",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}/questions",
+        "method":  "POST",
+        "scenario":  "Question with \u003e 6 options",
+        "expected":  "422 Validation Error",
+        "actual":  "422",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}/questions",
+        "method":  "POST",
+        "scenario":  "Question with 0 correct answers",
+        "expected":  "422 Validation Error",
+        "actual":  "422",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}/questions",
+        "method":  "POST",
+        "scenario":  "Question with multiple correct answers",
+        "expected":  "422 Validation Error",
+        "actual":  "422",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}/questions",
+        "method":  "POST",
+        "scenario":  "Question with time_limit \u003c 5",
+        "expected":  "422 Validation Error",
+        "actual":  "422",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}/questions",
+        "method":  "POST",
+        "scenario":  "Duplicate question_order in round",
+        "expected":  "409 Conflict",
+        "actual":  "409",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}/questions",
+        "method":  "POST",
+        "scenario":  "Create question 2",
+        "expected":  "201 Created",
+        "actual":  "201",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/rounds/{roundId}/questions",
+        "method":  "POST",
+        "scenario":  "Create question 3",
+        "expected":  "201 Created",
+        "actual":  "201",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/questions/{questionId}",
+        "method":  "GET",
+        "scenario":  "Get question detail as admin",
+        "expected":  "200 with options and is_correct",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/questions/{questionId}",
+        "method":  "GET",
+        "scenario":  "Get nonexistent question",
+        "expected":  "404 Not Found",
+        "actual":  "404",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/questions/{questionId}",
+        "method":  "PATCH",
+        "scenario":  "Update question time limit",
+        "expected":  "200 OK",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/questions/{questionId}/media",
+        "method":  "POST",
+        "scenario":  "Upload valid PNG image",
+        "expected":  "201 Created",
+        "actual":  "201",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/media/af2519273d494b5bb71044e0af6a9ea2.png",
+        "method":  "GET",
+        "scenario":  "Access stored media file",
+        "expected":  "200 OK",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/questions/{questionId}/media",
+        "method":  "POST",
+        "scenario":  "Upload unsupported file type (shell script)",
+        "expected":  "400 Bad Request",
+        "actual":  "400",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/questions/{questionId}/media",
+        "method":  "POST",
+        "scenario":  "Upload spoofed extension with invalid magic bytes",
+        "expected":  "400 Bad Request",
+        "actual":  "400",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/questions/{questionId}/media",
+        "method":  "POST",
+        "scenario":  "Upload empty file",
+        "expected":  "400 Bad Request",
+        "actual":  "400",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games",
+        "method":  "POST",
+        "scenario":  "Create live game session",
+        "expected":  "201 Created with PIN",
+        "actual":  "201 with generated PIN",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/join",
+        "method":  "POST",
+        "scenario":  "Join with valid PIN \u0026 nickname",
+        "expected":  "201 Created with token",
+        "actual":  "201",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/join",
+        "method":  "POST",
+        "scenario":  "Join with duplicate nickname",
+        "expected":  "409 Conflict",
+        "actual":  "409",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/join",
+        "method":  "POST",
+        "scenario":  "Join with invalid PIN",
+        "expected":  "404 Not Found",
+        "actual":  "404",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/rejoin",
+        "method":  "POST",
+        "scenario":  "Rejoin game with saved token",
+        "expected":  "200 OK",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/rejoin",
+        "method":  "POST",
+        "scenario":  "Rejoin game with invalid token",
+        "expected":  "401 Unauthorized",
+        "actual":  "401",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/{gameId}/current-question",
+        "method":  "GET",
+        "scenario":  "Get question before game starts",
+        "expected":  "409 Conflict (not started)",
+        "actual":  "409",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/{gameId}/start",
+        "method":  "POST",
+        "scenario":  "Host starts game",
+        "expected":  "200 OK status=active",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/{gameId}/current-question",
+        "method":  "GET",
+        "scenario":  "Verify is_correct is NEVER exposed to participant",
+        "expected":  "is_correct omitted from options",
+        "actual":  "OMITTED (Secure)",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/{gameId}/answers",
+        "method":  "POST",
+        "scenario":  "Submit valid answer letter A",
+        "expected":  "201 Answer locked in",
+        "actual":  "201",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/{gameId}/answers",
+        "method":  "POST",
+        "scenario":  "Duplicate answer submission on same question",
+        "expected":  "409 Conflict (already answered)",
+        "actual":  "409",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/{gameId}/pause",
+        "method":  "POST",
+        "scenario":  "Participant attempts admin control",
+        "expected":  "403 Forbidden",
+        "actual":  "403",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/{gameId}/stage-token",
+        "method":  "GET",
+        "scenario":  "Host generates stage token",
+        "expected":  "200 with stage_token",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    },
+    {
+        "endpoint":  "/games/{gameId}/leaderboard",
+        "method":  "GET",
+        "scenario":  "Public leaderboard retrieval",
+        "expected":  "200 OK",
+        "actual":  "200",
+        "status":  "PASS",
+        "details":  ""
+    }
+]

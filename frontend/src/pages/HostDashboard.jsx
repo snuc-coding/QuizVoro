@@ -1,766 +1,554 @@
-
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState, useRef, useCallback } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
+import { hostApi, quizApi } from "../services/api";
+import { QuizWebSocket } from "../services/websocket";
 
-const LIVE_STATE_KEY = "asterisLiveQuizState";
-const GAME_PIN_PREFIX = "asterisGamePin_";
-
-function generateGamePin() {
-  return String(Math.floor(10000000 + Math.random() * 90000000));
-}
-
-function getOrCreateGamePin(quizId) {
-  const key = `${GAME_PIN_PREFIX}${quizId}`;
-  let pin = localStorage.getItem(key);
-
-  if (!/^\d{8}$/.test(pin || "")) {
-    pin = generateGamePin();
-    localStorage.setItem(key, pin);
-  }
-
-  return pin;
-}
-
-function getQuestionText(question) {
-  return (
-    question?.text ||
-    question?.question ||
-    question?.questionText ||
-    "Untitled question"
-  );
-}
-
-function HostDashboard({
-  quiz,
-  onOpenProjector,
-  onBack,
-  onStartQuiz,
-}) {
+function HostDashboard() {
   const navigate = useNavigate();
-  const quizId = quiz?.id;
+  const [searchParams] = useSearchParams();
 
-  const questions = Array.isArray(quiz?.questions)
-    ? quiz.questions
-    : [];
+  const quizId = searchParams.get("quizId");
+  const gameId = searchParams.get("gameId");
 
-  const questionCount =
-    questions.length ||
-    Number(quiz?.questionCount) ||
-    (typeof quiz?.questions === "number" ? quiz.questions : 0);
+  const [quiz, setQuiz] = useState(null);
+  const [game, setGame] = useState(null);
+  const [players, setPlayers] = useState([]);
+  const [status, setStatus] = useState("lobby"); // lobby, active, paused, reveal, finished
+  const [currentQuestion, setCurrentQuestion] = useState(null);
+  const [questionNumber, setQuestionNumber] = useState(1);
+  const [totalQuestions, setTotalQuestions] = useState(1);
+  const [answeredCount, setAnsweredCount] = useState(0);
+  const [revealedData, setRevealedData] = useState(null);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [stageToken, setStageToken] = useState("");
+  const [error, setError] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
 
-  const [gamePin, setGamePin] = useState("");
-  const [liveState, setLiveState] = useState(null);
-  const [notice, setNotice] = useState("");
+  const wsRef = useRef(null);
 
-  const status = liveState?.status || "ready";
-  const currentIndex = liveState?.currentQuestionIndex || 0;
-  const showLeaderboard = Boolean(liveState?.showLeaderboard);
-
-  const isReady = status === "ready";
-  const isRunning = status === "running";
-  const isResults = status === "results";
-  const isEnded = status === "ended";
-
-  const isLastQuestion =
-    questionCount > 0 && currentIndex >= questionCount - 1;
-
-  const playerCount = Number(liveState?.totalPlayers || 0);
-
-  const joinUrl =
-    gamePin && !isEnded
-      ? `${window.location.origin}/join?pin=${encodeURIComponent(gamePin)}`
-      : "";
-
-  // Load the selected quiz session.
+  // Load quiz details and active game
   useEffect(() => {
-    if (!quizId) return;
-
-    const pin = getOrCreateGamePin(quizId);
-    setGamePin(pin);
-
-    try {
-      const saved = JSON.parse(
-        localStorage.getItem(LIVE_STATE_KEY) || "null"
-      );
-
-      const initialState =
-        saved && String(saved.quizId) === String(quizId)
-          ? { ...saved, gamePin: saved.gamePin || pin }
-          : {
-              quizId,
-              gamePin: pin,
-              status: "ready",
-              currentQuestionIndex: 0,
-              showLeaderboard: false,
-              leaderboard: [],
-              totalPlayers: 0,
-              answeredCount: 0,
-              updatedAt: Date.now(),
-            };
-
-      setLiveState(initialState);
-      localStorage.setItem(
-        LIVE_STATE_KEY,
-        JSON.stringify(initialState)
-      );
-    } catch (error) {
-      console.error("Unable to load quiz state:", error);
-      setNotice("Unable to load the quiz session.");
+    if (!quizId || !gameId) {
+      setError("Missing quizId or gameId in query parameters.");
+      return;
     }
-  }, [quizId]);
 
-  // Synchronize state changes from the projector or another tab.
-  useEffect(() => {
-    function handleStorage(event) {
-      if (event.key !== LIVE_STATE_KEY || !event.newValue) return;
+    let isMounted = true;
 
+    async function loadInitial() {
       try {
-        const nextState = JSON.parse(event.newValue);
+        const quizData = await quizApi.getQuiz(quizId);
+        if (isMounted) setQuiz(quizData);
 
-        if (String(nextState.quizId) === String(quizId)) {
-          setLiveState(nextState);
+        const tokenData = await hostApi.getStageToken(gameId);
+        if (isMounted) setStageToken(tokenData.stage_token);
 
-          if (/^\d{8}$/.test(nextState.gamePin || "")) {
-            setGamePin(nextState.gamePin);
-          }
+        const rawGame = sessionStorage.getItem("quizvoro_active_game");
+        if (rawGame && isMounted) {
+          const parsed = JSON.parse(rawGame);
+          setGame(parsed);
+          setStatus(parsed.status || "lobby");
         }
-      } catch (error) {
-        console.error("Unable to synchronize quiz state:", error);
+      } catch (err) {
+        console.error("Failed to load host initial data:", err);
+        if (isMounted) setError(err.message || "Failed to load game info.");
       }
     }
 
-    window.addEventListener("storage", handleStorage);
-
-    return () => window.removeEventListener("storage", handleStorage);
-  }, [quizId]);
-
-  // Save state so the projector tab can react to host controls.
-  function saveLiveState(updates) {
-    if (!quizId || !liveState) return;
-
-    const nextState = {
-      ...liveState,
-      ...updates,
-      quizId,
-      gamePin,
-      updatedAt: Date.now(),
+    loadInitial();
+    return () => {
+      isMounted = false;
     };
+  }, [quizId, gameId]);
 
-    localStorage.setItem(
-      LIVE_STATE_KEY,
-      JSON.stringify(nextState)
-    );
+  // Connect Host WebSocket
+  useEffect(() => {
+    if (!gameId) return;
 
-    setLiveState(nextState);
-    setNotice("");
-  }
-
-  function handleStartQuiz() {
-    if (!questionCount || !isReady) return;
-
-    saveLiveState({
-      status: "running",
-      currentQuestionIndex: 0,
-      showLeaderboard: false,
+    const ws = new QuizWebSocket({
+      role: "host",
+      gameId,
+      onOpen: () => {
+        setWsConnected(true);
+      },
+      onClose: () => {
+        setWsConnected(false);
+      },
+      onError: (err) => {
+        console.warn("Host WS error:", err);
+      },
+      onMessage: (event, data) => {
+        if (event === "PLAYER_JOINED") {
+          setPlayers((prev) => {
+            if (prev.some((p) => p.participant_id === data.participant_id)) return prev;
+            return [...prev, { participant_id: data.participant_id, nickname: data.nickname }];
+          });
+        } else if (event === "PLAYER_LEFT") {
+          setPlayers((prev) => prev.filter((p) => p.participant_id !== data.participant_id));
+        } else if (event === "PLAYER_KICKED") {
+          setPlayers((prev) => prev.filter((p) => p.participant_id !== data.participant_id));
+        } else if (event === "QUESTION_STARTED") {
+          setStatus("active");
+          setCurrentQuestion(data.question);
+          setQuestionNumber(data.question_number);
+          setTotalQuestions(data.total_questions);
+          setAnsweredCount(0);
+          setRevealedData(null);
+        } else if (event === "ANSWER_COUNT_UPDATED") {
+          setAnsweredCount(data.answered_count);
+        } else if (event === "GAME_PAUSED") {
+          setStatus("paused");
+        } else if (event === "GAME_RESUMED") {
+          setStatus("active");
+        } else if (event === "ANSWER_REVEALED") {
+          setStatus("reveal");
+          setRevealedData(data);
+        } else if (event === "LEADERBOARD_UPDATED") {
+          setLeaderboard(data.entries || []);
+        } else if (event === "GAME_FINISHED") {
+          setStatus("finished");
+        } else if (event === "ERROR") {
+          console.error("Host error event:", data);
+        }
+      },
     });
 
-    onStartQuiz?.();
-  }
+    ws.connect();
+    wsRef.current = ws;
 
-  function handleShowResults() {
-    if (!isRunning) return;
-
-    saveLiveState({
-      status: "results",
-      showLeaderboard: false,
-    });
-  }
-
-  function handleNextQuestion() {
-    if (!isResults || isLastQuestion) return;
-
-    saveLiveState({
-      status: "running",
-      currentQuestionIndex: currentIndex + 1,
-      showLeaderboard: false,
-    });
-  }
-
-  function handleShowLeaderboard() {
-    if (!isResults || isLastQuestion) return;
-
-    saveLiveState({
-      showLeaderboard: true,
-    });
-  }
-
-  function handleReturnToResults() {
-    if (!showLeaderboard || isEnded) return;
-
-    saveLiveState({
-      status: "results",
-      showLeaderboard: false,
-    });
-  }
-
-  function handleShowFinalLeaderboard() {
-    if (!isResults || !isLastQuestion) return;
-
-    saveLiveState({
-      status: "ended",
-      showLeaderboard: true,
-    });
-  }
-
-  function handleEndQuiz() {
-    if (isEnded) return;
-
-    if (
-      !window.confirm(
-        "End this quiz and show the final leaderboard?"
-      )
-    ) {
-      return;
-    }
-
-    saveLiveState({
-      status: "ended",
-      showLeaderboard: true,
-    });
-  }
-
-  // Restart the session and notify the projector tab.
-  function handleRestartQuiz() {
-    if (
-      !window.confirm(
-        "Restart this quiz from Question 1? The current session scores will be reset."
-      )
-    ) {
-      return;
-    }
-
-    const pin = gamePin || getOrCreateGamePin(quizId);
-
-    const resetState = {
-      quizId,
-      gamePin: pin,
-      status: "ready",
-      currentQuestionIndex: 0,
-      showLeaderboard: false,
-      leaderboard: [],
-      totalPlayers: 0,
-      answeredCount: 0,
-      updatedAt: Date.now(),
+    return () => {
+      ws.close();
     };
+  }, [gameId]);
 
-    localStorage.setItem(
-      LIVE_STATE_KEY,
-      JSON.stringify(resetState)
-    );
+  // Host Action Handlers
+  const handleStartGame = useCallback(async () => {
+    setActionLoading(true);
+    try {
+      if (wsRef.current && wsConnected) {
+        wsRef.current.sendHostAction("START");
+      } else {
+        await hostApi.startGame(gameId);
+      }
+    } catch (err) {
+      alert(err.message || "Failed to start quiz.");
+    } finally {
+      setActionLoading(false);
+    }
+  }, [gameId, wsConnected]);
 
-    setGamePin(pin);
-    setLiveState(resetState);
-    setNotice("Quiz reset. You can start again.");
-  }
+  const handleNextQuestion = useCallback(async () => {
+    setActionLoading(true);
+    try {
+      if (wsRef.current && wsConnected) {
+        wsRef.current.sendHostAction("NEXT_QUESTION");
+      } else {
+        await hostApi.nextQuestion(gameId);
+      }
+    } catch (err) {
+      alert(err.message || "Failed to proceed to next question.");
+    } finally {
+      setActionLoading(false);
+    }
+  }, [gameId, wsConnected]);
+
+  const handlePause = useCallback(async () => {
+    setActionLoading(true);
+    try {
+      if (wsRef.current && wsConnected) {
+        wsRef.current.sendHostAction("PAUSE");
+      } else {
+        await hostApi.pauseGame(gameId);
+      }
+    } catch (err) {
+      alert(err.message || "Failed to pause.");
+    } finally {
+      setActionLoading(false);
+    }
+  }, [gameId, wsConnected]);
+
+  const handleResume = useCallback(async () => {
+    setActionLoading(true);
+    try {
+      if (wsRef.current && wsConnected) {
+        wsRef.current.sendHostAction("RESUME");
+      } else {
+        await hostApi.resumeGame(gameId);
+      }
+    } catch (err) {
+      alert(err.message || "Failed to resume.");
+    } finally {
+      setActionLoading(false);
+    }
+  }, [gameId, wsConnected]);
+
+  const handleReveal = useCallback(async () => {
+    setActionLoading(true);
+    try {
+      if (wsRef.current && wsConnected) {
+        wsRef.current.sendHostAction("REVEAL");
+      } else {
+        await hostApi.revealAnswer(gameId);
+      }
+    } catch (err) {
+      alert(err.message || "Failed to reveal answers.");
+    } finally {
+      setActionLoading(false);
+    }
+  }, [gameId, wsConnected]);
+
+  const handleEndGame = useCallback(async () => {
+    if (!window.confirm("Are you sure you want to end the game now?")) return;
+    setActionLoading(true);
+    try {
+      if (wsRef.current && wsConnected) {
+        wsRef.current.sendHostAction("END");
+      } else {
+        await hostApi.endGame(gameId);
+      }
+      setStatus("finished");
+    } catch (err) {
+      alert(err.message || "Failed to end game.");
+    } finally {
+      setActionLoading(false);
+    }
+  }, [gameId, wsConnected]);
+
+  const handleKickPlayer = useCallback(
+    async (pId) => {
+      try {
+        if (wsRef.current && wsConnected) {
+          wsRef.current.sendHostAction("KICK", pId);
+        } else {
+          await hostApi.kickParticipant(gameId, pId);
+        }
+      } catch (err) {
+        alert(err.message || "Failed to remove player.");
+      }
+    },
+    [gameId, wsConnected]
+  );
 
   function handleOpenProjector() {
-    if (!quizId) return;
-
-    sessionStorage.setItem(
-      "asterisSelectedQuizId",
-      String(quizId)
-    );
-
-    if (onOpenProjector) {
-      onOpenProjector();
-      return;
-    }
-
-    const projector = window.open(
-      `/stage?quizId=${encodeURIComponent(quizId)}`,
-      "asteris-projector"
-    );
-
-    if (!projector) {
-      setNotice("Allow pop-ups in your browser to open the projector.");
-    } else {
-      projector.focus();
-    }
+    const url = `/stage?gameId=${gameId}${stageToken ? `&token=${encodeURIComponent(stageToken)}` : ""}`;
+    window.open(url, "quizvoro-projector");
   }
 
-  async function handleCopyJoinLink() {
-    if (isEnded || !joinUrl) return;
+  const pin = game?.pin || "--------";
+  const joinUrl = `${window.location.origin}/?pin=${pin}`;
 
-    try {
-      await navigator.clipboard.writeText(joinUrl);
-      setNotice("Join link copied successfully.");
-    } catch {
-      setNotice(`Copy this link manually: ${joinUrl}`);
-    }
-  }
-
-  const stateLabel = isEnded
-    ? "Quiz completed"
-    : showLeaderboard
-      ? "Leaderboard displayed"
-      : isResults
-        ? "Question results"
-        : isRunning
-          ? `Question ${currentIndex + 1} in progress`
-          : "Ready to host";
-
-  if (!quiz) {
+  if (error) {
     return (
-      <main className="quiz-background flex min-h-screen items-center justify-center px-5 text-white">
-        <div className="rounded-2xl border border-white/15 bg-[#260638] p-8 text-center">
-          <h1 className="brand-font text-3xl">Asteris</h1>
-          <p className="mt-3 text-purple-100">
-            Loading quiz details...
-          </p>
-          <button
-            type="button"
-            onClick={onBack}
-            className="mt-5 rounded-xl border border-white/30 px-5 py-3"
-          >
-            Back to quiz list
-          </button>
-        </div>
+      <main className="quiz-background flex min-h-screen flex-col items-center justify-center p-6 text-white">
+        <h2 className="text-2xl font-bold mb-4">Error loading game</h2>
+        <p className="text-red-300 mb-6">{error}</p>
+        <button
+          onClick={() => navigate("/admin/quizzes")}
+          className="rounded-xl bg-[#91F0DF] px-6 py-3 font-bold text-[#31064D]"
+        >
+          Back to Saved Quizzes
+        </button>
       </main>
     );
   }
 
   return (
-    <main className="quiz-background min-h-screen px-4 py-6 text-white sm:px-8 lg:px-10">
-      <div className="mx-auto max-w-[1500px]">
-
-        {/* Header */}
-        <header className="mb-7 flex items-center justify-between gap-4 border-b border-white/15 pb-5">
-          <button
-            type="button"
-            onClick={() => navigate("/admin/dashboard")}
-            className="brand-font text-3xl font-bold sm:text-4xl"
-          >
-            Asteris
-          </button>
-
-          <button
-            type="button"
-            onClick={() => navigate("/admin/dashboard")}
-            className="rounded-xl border border-white/30 px-4 py-3 text-sm font-bold transition hover:bg-white/10 sm:px-6"
-          >
-            ADMIN DASHBOARD
-          </button>
-        </header>
-
-        {/* Quiz heading */}
-        <section className="mb-5">
-          <p className="nav-font text-xs font-bold tracking-[0.28em] text-[#91F0DF]">
-            LIVE QUIZ HOSTING
-          </p>
-
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <h1 className="brand-font text-4xl font-bold sm:text-5xl">
-              {quiz.name || quiz.title || "Your Quiz"}
-            </h1>
-
-            <span className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm">
-              {questionCount} {questionCount === 1 ? "question" : "questions"}
+    <main className="min-h-screen px-4 py-8 text-[#31064D] sm:px-8">
+      <div className="mx-auto max-w-6xl">
+        {/* Top bar */}
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-white/20 pb-6 text-white">
+          <div>
+            <span className="text-xs font-bold tracking-widest text-[#91F0DF] uppercase">
+              LIVE HOST CONTROLLER
             </span>
+            <h1 className="brand-font text-3xl font-bold sm:text-4xl">
+              {quiz?.title || "Quiz"}
+            </h1>
           </div>
 
-          <p className="mt-3 flex items-center gap-2 text-sm text-purple-100">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#91F0DF]" />
-            {stateLabel}
-          </p>
-
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-purple-100/80">
-            {isEnded
-              ? "This quiz has finished. The final leaderboard is selected for the projector."
-              : "Manage the live quiz, show results, and choose what appears on the projector after each question."}
-          </p>
-        </section>
-
-        {/* Host controls */}
-        <section className="mb-6 rounded-2xl border border-[#A77BC5]/40 bg-[#260638]/90 p-5 shadow-xl sm:p-7">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="nav-font text-xs font-bold uppercase tracking-[0.2em] text-[#91F0DF]">
-                HOST CONTROLS
-              </p>
-
-              <h2 className="brand-font mt-1 text-2xl sm:text-3xl">
-                {isEnded
-                  ? "Quiz completed"
-                  : showLeaderboard
-                    ? "Leaderboard is displayed"
-                    : isResults
-                      ? "Choose what happens next"
-                      : isRunning
-                        ? `Question ${currentIndex + 1} is live`
-                        : "Ready to launch?"}
-              </h2>
-
-              <p className="mt-2 text-sm leading-6 text-purple-100/75">
-                {isEnded
-                  ? "Restart the quiz whenever you are ready for a new session."
-                  : showLeaderboard
-                    ? "Return to the results controls or continue managing the quiz."
-                    : isResults
-                      ? isLastQuestion
-                        ? "This is the final question. Display the final leaderboard to finish."
-                        : "Choose whether to continue to the next question or show the leaderboard."
-                      : isRunning
-                        ? "Show the question results when you are ready."
-                        : "Start the quiz when you are ready."}
-              </p>
-            </div>
-
-            {liveState && !isReady && (
-              <div className="rounded-xl border border-white/10 bg-white/10 px-5 py-3 text-center">
-                <p className="text-xs tracking-wider text-purple-200">
-                  PROGRESS
-                </p>
-                <p className="mt-1 text-2xl font-bold">
-                  {Math.min(currentIndex + 1, questionCount)}
-                  <span className="text-base font-normal text-purple-200">
-                    {" "}/ {questionCount}
-                  </span>
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-
-            {isReady && (
-              <button
-                type="button"
-                onClick={handleStartQuiz}
-                disabled={!questionCount}
-                className="min-h-[58px] rounded-xl bg-[#91F0DF] px-4 py-4 font-extrabold text-[#21052F] transition hover:bg-[#ACF7EA] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                ▶ START QUIZ
-              </button>
-            )}
-
-            {isRunning && (
-              <button
-                type="button"
-                onClick={handleShowResults}
-                className="min-h-[58px] rounded-xl bg-[#C51E50] px-4 py-4 font-extrabold text-white transition hover:bg-[#D92D62]"
-              >
-                SHOW QUESTION RESULTS
-              </button>
-            )}
-
-            {isResults && !isLastQuestion && (
-              <>
-                <button
-                  type="button"
-                  onClick={handleNextQuestion}
-                  className="min-h-[58px] rounded-xl bg-[#91F0DF] px-4 py-4 font-extrabold text-[#21052F] transition hover:bg-[#ACF7EA]"
-                >
-                  NEXT QUESTION →
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleShowLeaderboard}
-                  className="min-h-[58px] rounded-xl bg-white px-4 py-4 font-extrabold text-[#31064D] transition hover:bg-purple-100"
-                >
-                  🏆 SHOW LEADERBOARD
-                </button>
-              </>
-            )}
-
-            {isResults && isLastQuestion && (
-              <button
-                type="button"
-                onClick={handleShowFinalLeaderboard}
-                className="min-h-[58px] rounded-xl bg-[#91F0DF] px-4 py-4 font-extrabold text-[#21052F] transition hover:bg-[#ACF7EA]"
-              >
-                🏆 SHOW FINAL LEADERBOARD
-              </button>
-            )}
-
-            {showLeaderboard && !isEnded && !isLastQuestion && (
-              <button
-                type="button"
-                onClick={handleReturnToResults}
-                className="min-h-[58px] rounded-xl border border-white/40 px-4 py-4 font-bold transition hover:bg-white/10"
-              >
-                RETURN TO RESULTS
-              </button>
-            )}
-
-            {!isEnded && (
-              <>
-                <button
-                  type="button"
-                  onClick={handleOpenProjector}
-                  className="min-h-[58px] rounded-xl border border-white/30 px-4 py-4 font-bold transition hover:bg-white/10"
-                >
-                  OPEN PROJECTOR ↗
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleEndQuiz}
-                  className="min-h-[58px] rounded-xl border border-rose-300/70 px-4 py-4 font-bold text-rose-100 transition hover:bg-rose-500/15"
-                >
-                  END QUIZ
-                </button>
-              </>
-            )}
-
-            {isEnded && (
-              <button
-                type="button"
-                onClick={handleRestartQuiz}
-                className="min-h-[58px] rounded-xl bg-[#91F0DF] px-5 py-4 font-extrabold text-[#21052F] transition hover:bg-[#ACF7EA]"
-              >
-                ↻ RESTART QUIZ
-              </button>
-            )}
-          </div>
-
-          {isEnded && (
-            <p className="mt-5 rounded-xl border border-[#91F0DF]/20 bg-white/5 p-4 text-sm text-purple-100">
-              The quiz has ended. The joining card is hidden. Restart to begin a new session.
-            </p>
-          )}
-
-          {notice && (
-            <p className="mt-4 break-words rounded-lg border border-white/10 bg-white/10 p-3 text-sm text-purple-50">
-              {notice}
-            </p>
-          )}
-        </section>
-
-        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_350px]">
-
-          {/* Main column */}
-          <div className="min-w-0">
-
-            {/* Joining card disappears after completion */}
-            {!isEnded && (
-              <>
-                <section className="grid gap-6 rounded-2xl bg-white p-5 text-[#31064D] shadow-xl sm:p-7 md:grid-cols-[minmax(0,1fr)_150px_minmax(0,1fr)]">
-
-                  <div>
-                    <p className="nav-font text-xs font-bold tracking-widest text-purple-700">
-                      PLAYERS JOIN HERE
-                    </p>
-
-                    <h2 className="brand-font mt-2 text-3xl">
-                      Game PIN
-                    </h2>
-
-                    <div className="mt-4 rounded-xl bg-[#F0EAF7] px-3 py-5 text-center">
-                      <p className="whitespace-nowrap text-3xl font-black tracking-widest sm:text-4xl">
-                        {gamePin
-                          ? `${gamePin.slice(0, 3)} ${gamePin.slice(3)}`
-                          : "--------"}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col items-center justify-center border-t border-gray-200 pt-5 md:border-l md:border-t-0 md:pl-5 md:pt-0">
-                    {joinUrl && (
-                      <div className="rounded-xl border border-gray-200 p-2">
-                        <QRCodeSVG
-                          value={joinUrl}
-                          size={112}
-                          level="H"
-                          includeMargin
-                        />
-                      </div>
-                    )}
-
-                    <p className="mt-2 text-sm text-gray-600">
-                      Scan to join
-                    </p>
-                  </div>
-
-                  <div className="flex flex-col justify-center border-t border-gray-200 pt-5 md:border-l md:pl-5 md:pt-0">
-                    <h3 className="font-bold">Projector view</h3>
-
-                    <p className="mt-2 text-sm leading-5 text-gray-600">
-                      Open a separate audience screen for the live question,
-                      results, and leaderboard.
-                    </p>
-
-                    <button
-                      type="button"
-                      onClick={handleOpenProjector}
-                      className="nav-font mt-4 rounded-xl bg-[#31064D] px-4 py-3 font-bold text-white transition hover:bg-[#49205C]"
-                    >
-                      OPEN PROJECTOR VIEW ↗
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleCopyJoinLink}
-                      className="mt-3 rounded-xl border border-purple-200 px-4 py-3 font-bold transition hover:bg-purple-50"
-                    >
-                      COPY JOIN LINK
-                    </button>
-                  </div>
-                </section>
-
-                <div className="mt-4 rounded-xl border border-white/10 bg-white/10 p-4 text-sm text-purple-100">
-                  Players join on their phones. Questions and leaderboard changes are controlled by the host.
-                </div>
-              </>
-            )}
-
-            {/* Question sequence */}
-            <section className="mt-6 rounded-2xl bg-white p-5 text-[#31064D] shadow-xl sm:p-7">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="brand-font text-2xl">
-                  Question sequence
-                </h2>
-
-                <span className="text-sm text-gray-500">
-                  {questionCount} questions
-                </span>
-              </div>
-
-              {questions.map((question, index) => {
-                const isCurrent =
-                  index === currentIndex && !isEnded;
-
-                const isCompleted =
-                  isEnded || index < currentIndex;
-
-                return (
-                  <div
-                    key={question.id ?? index}
-                    className={`mt-4 flex items-center gap-3 rounded-xl border p-4 sm:gap-4 ${
-                      isCurrent
-                        ? "border-purple-300 bg-purple-50"
-                        : "border-gray-200 bg-white"
-                    }`}
-                  >
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#F0DDFB] font-bold">
-                      {index + 1}
-                    </span>
-
-                    <div className="min-w-0 flex-1">
-                      <p className="break-words font-semibold">
-                        {getQuestionText(question)}
-                      </p>
-
-                      <p className="mt-1 text-sm text-gray-500">
-                        Multiple choice
-                      </p>
-                    </div>
-
-                    <span className="shrink-0 rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600 sm:px-3">
-                      {isCompleted
-                        ? "Completed"
-                        : isCurrent && isResults
-                          ? "Results"
-                          : isCurrent && isRunning
-                            ? "In progress"
-                            : "Not started"}
-                    </span>
-                  </div>
-                );
-              })}
-
-              {questions.length === 0 && (
-                <p className="mt-4 rounded-xl bg-purple-50 p-4 text-sm text-gray-600">
-                  Question details are unavailable for this quiz.
-                </p>
-              )}
-            </section>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${
+              wsConnected ? "bg-green-500/20 text-green-300" : "bg-red-500/20 text-red-300"
+            }`}>
+              <span className={`h-2 w-2 rounded-full ${wsConnected ? "bg-green-400" : "bg-red-400"}`} />
+              {wsConnected ? "LIVE SYNC ON" : "CONNECTING..."}
+            </span>
 
             <button
               type="button"
-              onClick={onBack}
-              className="nav-font mt-5 w-full rounded-xl border border-white/20 bg-white/5 px-5 py-3 font-bold transition hover:bg-white/10"
+              onClick={handleOpenProjector}
+              className="rounded-xl bg-[#E6D99D] px-4 py-2.5 font-bold text-[#31064D] hover:bg-[#F2E5AB]"
             >
-              ← BACK TO QUIZ LIST
+              📺 OPEN PROJECTOR
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navigate("/admin/quizzes")}
+              className="rounded-xl border border-white/40 px-4 py-2.5 font-bold text-white hover:bg-white/10"
+            >
+              EXIT
             </button>
           </div>
+        </header>
 
-          {/* Right column */}
-          <aside className="space-y-5">
+        {/* Status / Controller Cards */}
+        {status === "lobby" && (
+          <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
+            {/* PIN & QR Card */}
+            <div className="rounded-3xl bg-white p-8 shadow-2xl lg:col-span-1 text-center">
+              <p className="text-xs font-bold tracking-widest text-gray-500 uppercase">
+                JOIN PIN
+              </p>
+              <p className="brand-font my-2 text-5xl font-extrabold tracking-widest text-[#31064D]">
+                {pin}
+              </p>
+              <div className="my-6 flex justify-center">
+                <QRCodeSVG value={joinUrl} size={180} />
+              </div>
+              <p className="text-xs text-gray-500">
+                Join at <span className="font-semibold">{window.location.origin}</span>
+              </p>
+            </div>
 
-            <section className="rounded-2xl border border-white/10 bg-[#260638]/85 p-6 shadow-xl">
-              <h2 className="brand-font text-2xl">
-                Live status
-              </h2>
-
-              <div className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-white p-4 text-[#31064D]">
-                <div>
-                  <p className="text-sm text-gray-500">
-                    Players joined
-                  </p>
-                  <p className="mt-1 text-3xl font-bold">
-                    {playerCount}
-                  </p>
+            {/* Players Lobby Card */}
+            <div className="rounded-3xl bg-white p-8 shadow-2xl lg:col-span-2 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between border-b pb-4">
+                  <h2 className="text-2xl font-bold text-[#31064D]">
+                    Players in Lobby ({players.length})
+                  </h2>
+                  <span className="text-sm font-semibold text-purple-700">
+                    Waiting for players to join...
+                  </span>
                 </div>
 
-                <span className="rounded-full bg-[#F0EAF7] px-3 py-1 text-xs">
-                  {isEnded
-                    ? "Finished"
-                    : showLeaderboard
-                      ? "Leaderboard"
-                      : isResults
-                        ? "Results"
-                        : isRunning
-                          ? "In progress"
-                          : "Waiting to start"}
+                <div className="mt-6 flex flex-wrap gap-2.5 max-h-64 overflow-y-auto">
+                  {players.length === 0 ? (
+                    <p className="text-gray-400 italic py-8">
+                      No participants have joined yet. Tell players to enter PIN {pin}.
+                    </p>
+                  ) : (
+                    players.map((p) => (
+                      <div
+                        key={p.participant_id}
+                        className="flex items-center gap-2 rounded-xl bg-[#F0EFF2] px-3.5 py-2 font-semibold text-[#31064D]"
+                      >
+                        <span>{p.nickname}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleKickPlayer(p.participant_id)}
+                          className="text-xs text-red-500 hover:text-red-700 ml-1 font-bold"
+                          title="Kick player"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-8 border-t pt-6 flex justify-end">
+                <button
+                  type="button"
+                  disabled={actionLoading}
+                  onClick={handleStartGame}
+                  className="rounded-2xl bg-[#91F0DF] px-8 py-4 text-xl font-bold text-[#31064D] shadow-lg transition hover:brightness-105 disabled:opacity-50"
+                >
+                  {actionLoading ? "STARTING..." : "START QUIZ NOW 🚀"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Live Question / Controls Active */}
+        {(status === "active" || status === "paused" || status === "reveal") && (
+          <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
+            {/* Current Question Info */}
+            <div className="rounded-3xl bg-white p-8 shadow-2xl lg:col-span-2">
+              <div className="flex items-center justify-between border-b pb-4">
+                <span className="rounded-full bg-purple-100 px-3 py-1 font-bold text-sm text-[#31064D]">
+                  Question {questionNumber} of {totalQuestions}
+                </span>
+                <span className="text-sm font-semibold text-gray-500">
+                  {answeredCount} answered
                 </span>
               </div>
 
-              <p className="mt-3 text-xs leading-5 text-purple-100/60">
-                The player count updates when the joining system supplies the live total.
-              </p>
-            </section>
-
-            <section className="rounded-2xl border border-white/10 bg-[#260638]/85 p-6 shadow-xl">
-              <h2 className="brand-font text-xl">
-                Quiz settings
+              <h2 className="mt-6 text-2xl font-bold leading-snug sm:text-3xl text-[#31064D]">
+                {currentQuestion?.question_text || "Current Question"}
               </h2>
 
-              <div className="mt-4 space-y-3 text-sm">
-                <div className="flex justify-between gap-3">
-                  <span className="text-purple-100/70">
-                    Quiz name
-                  </span>
-                  <span className="text-right">
-                    {quiz.name || quiz.title || "Quiz"}
-                  </span>
-                </div>
+              {/* Options display */}
+              <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {currentQuestion?.options?.map((opt, idx) => {
+                  const isRevealed = status === "reveal";
+                  const isCorrect = revealedData?.correct_option_id === opt.id;
+                  const count =
+                    revealedData?.distribution?.find((d) => d.option_id === opt.id)?.count || 0;
 
-                <div className="flex justify-between gap-3">
-                  <span className="text-purple-100/70">
-                    Total questions
-                  </span>
-                  <span>{questionCount}</span>
-                </div>
-
-                <div className="flex justify-between gap-3">
-                  <span className="text-purple-100/70">
-                    Question type
-                  </span>
-                  <span>Multiple choice</span>
-                </div>
-
-                <div className="flex justify-between gap-3">
-                  <span className="text-purple-100/70">
-                    Results after each question
-                  </span>
-                  <span>Yes</span>
-                </div>
+                  return (
+                    <div
+                      key={opt.id}
+                      className={`flex items-center justify-between rounded-2xl border-2 p-4 transition ${
+                        isRevealed && isCorrect
+                          ? "border-green-500 bg-green-50"
+                          : isRevealed
+                          ? "border-gray-200 bg-gray-50 opacity-70"
+                          : "border-gray-200 bg-[#FAF9FD]"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#31064D] font-bold text-white text-sm">
+                          {String.fromCharCode(65 + idx)}
+                        </span>
+                        <span className="font-semibold text-[#31064D]">
+                          {opt.option_text}
+                        </span>
+                      </div>
+                      {isRevealed && (
+                        <span className="font-bold text-sm text-gray-600">
+                          {count} votes
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            </section>
-          </aside>
-        </div>
+            </div>
+
+            {/* Host Control Actions */}
+            <div className="rounded-3xl bg-white p-8 shadow-2xl lg:col-span-1 flex flex-col justify-between">
+              <div>
+                <h3 className="text-xl font-bold text-[#31064D] border-b pb-4">
+                  Host Controls
+                </h3>
+                <p className="mt-3 text-sm text-gray-500">
+                  Status: <strong className="uppercase text-[#31064D]">{status}</strong>
+                </p>
+              </div>
+
+              <div className="space-y-3 mt-6">
+                {status === "active" && (
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={handlePause}
+                    className="w-full rounded-xl bg-amber-500 py-3.5 font-bold text-white shadow transition hover:bg-amber-600 disabled:opacity-50"
+                  >
+                    ⏸ PAUSE TIMER
+                  </button>
+                )}
+
+                {status === "paused" && (
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={handleResume}
+                    className="w-full rounded-xl bg-green-600 py-3.5 font-bold text-white shadow transition hover:bg-green-700 disabled:opacity-50"
+                  >
+                    ▶ RESUME TIMER
+                  </button>
+                )}
+
+                {status !== "reveal" && (
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={handleReveal}
+                    className="w-full rounded-xl bg-[#C51E50] py-3.5 font-bold text-white shadow transition hover:bg-[#D6295D] disabled:opacity-50"
+                  >
+                    👁 REVEAL ANSWER & SCORE
+                  </button>
+                )}
+
+                {status === "reveal" && (
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={handleNextQuestion}
+                    className="w-full rounded-2xl bg-[#91F0DF] py-4 text-lg font-bold text-[#31064D] shadow-lg transition hover:brightness-105 disabled:opacity-50"
+                  >
+                    NEXT QUESTION →
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  disabled={actionLoading}
+                  onClick={handleEndGame}
+                  className="w-full rounded-xl border border-red-300 py-3 font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                >
+                  End Quiz Now
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Finished / Final Leaderboard */}
+        {status === "finished" && (
+          <div className="mt-8 rounded-3xl bg-white p-8 shadow-2xl">
+            <div className="text-center">
+              <span className="text-5xl">🏆</span>
+              <h2 className="brand-font mt-2 text-4xl font-bold text-[#31064D]">
+                Quiz Complete!
+              </h2>
+              <p className="mt-2 text-gray-600">
+                Final Leaderboard Standings
+              </p>
+            </div>
+
+            <div className="mt-8 max-w-2xl mx-auto space-y-3">
+              {leaderboard.length === 0 ? (
+                <p className="text-center text-gray-500 py-6">
+                  No scores recorded.
+                </p>
+              ) : (
+                leaderboard.map((entry, idx) => (
+                  <div
+                    key={entry.participant_id}
+                    className={`flex items-center justify-between rounded-2xl p-4 shadow-sm border ${
+                      idx === 0
+                        ? "bg-amber-100 border-amber-300 font-bold"
+                        : idx === 1
+                        ? "bg-gray-100 border-gray-300 font-bold"
+                        : idx === 2
+                        ? "bg-amber-50 border-amber-200 font-bold"
+                        : "bg-white border-gray-200"
+                    }`}
+                  >
+                    <div className="flex items-center gap-4">
+                      <span className="text-xl font-extrabold w-8 text-center text-[#31064D]">
+                        #{entry.rank}
+                      </span>
+                      <span className="text-lg text-[#31064D]">
+                        {entry.nickname}
+                      </span>
+                    </div>
+                    <span className="text-lg font-bold text-[#C51E50]">
+                      {entry.score} pts
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="mt-10 text-center">
+              <button
+                type="button"
+                onClick={() => navigate("/admin/quizzes")}
+                className="rounded-xl bg-[#31064D] px-8 py-3.5 font-bold text-white transition hover:bg-[#49205C]"
+              >
+                BACK TO QUIZZES
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );

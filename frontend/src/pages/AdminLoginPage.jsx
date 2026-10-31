@@ -1,33 +1,39 @@
-
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
+import { authApi } from "../services/api";
 
 function AdminLoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  function handleLogin(event) {
+  async function handleLogin(event) {
     event.preventDefault();
     setError("");
+    setLoading(true);
 
-    // Temporary demo authentication.
-    // Replace this check with the backend login API later.
-    if (
-      username.trim() === "admin" &&
-      password === "asteris123"
-    ) {
-      sessionStorage.setItem("asterisAdminLoggedIn", "true");
-      sessionStorage.setItem(
-        "asterisAdminUsername",
-        username.trim()
-      );
+    try {
+      await authApi.login(username.trim(), password);
 
-      navigate("/admin/dashboard", { replace: true });
-    } else {
-      setError("Invalid username or password.");
+      const params = new URLSearchParams(location.search);
+      const mode = params.get("mode");
+
+      if (mode === "create") {
+        navigate("/admin/create", { replace: true });
+      } else if (mode === "present") {
+        navigate("/admin/quizzes", { replace: true });
+      } else {
+        navigate("/admin/dashboard", { replace: true });
+      }
+    } catch (err) {
+      console.error("Admin login failed:", err);
+      setError(err.message || "Invalid username or password.");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -85,6 +91,7 @@ function AdminLoginPage() {
                 onChange={(event) => setUsername(event.target.value)}
                 placeholder="Enter username"
                 required
+                disabled={loading}
                 className="w-full rounded-xl border border-gray-300 bg-[#F7F5FC] px-4 py-3 outline-none transition focus:border-[#31064D] focus:ring-2 focus:ring-purple-200"
               />
             </div>
@@ -105,6 +112,7 @@ function AdminLoginPage() {
                 onChange={(event) => setPassword(event.target.value)}
                 placeholder="Enter password"
                 required
+                disabled={loading}
                 className="w-full rounded-xl border border-gray-300 bg-[#F7F5FC] px-4 py-3 outline-none transition focus:border-[#31064D] focus:ring-2 focus:ring-purple-200"
               />
             </div>
@@ -112,7 +120,7 @@ function AdminLoginPage() {
             {error && (
               <p
                 role="alert"
-                className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600"
+                className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-600 border border-red-200"
               >
                 {error}
               </p>
@@ -120,9 +128,10 @@ function AdminLoginPage() {
 
             <button
               type="submit"
-              className="w-full rounded-xl bg-[#31064D] px-6 py-3.5 font-bold text-white transition hover:bg-[#49205C]"
+              disabled={loading}
+              className="brand-font w-full rounded-xl bg-[#31064D] py-3.5 text-lg font-bold text-white transition hover:bg-[#49205C] disabled:opacity-50"
             >
-              LOGIN
+              {loading ? "SIGNING IN..." : "SIGN IN"}
             </button>
           </form>
         </section>

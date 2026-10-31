@@ -1,5 +1,5 @@
-
 import { useNavigate } from "react-router-dom";
+import { clearAdminToken } from "../services/api";
 
 function AdminNav() {
   const navigate = useNavigate();
@@ -18,10 +18,8 @@ function AdminNav() {
   ];
 
   function handleLogout() {
-    sessionStorage.removeItem("asterisAdminLoggedIn");
-    sessionStorage.removeItem("asterisAdminUsername");
+    clearAdminToken();
     sessionStorage.removeItem("asterisSelectedQuizId");
-
     navigate("/", { replace: true });
   }
 
@@ -54,7 +52,7 @@ function AdminNav() {
         <button
           type="button"
           onClick={handleLogout}
-          className="rounded-xl border border-white/50 px-4 py-3 font-bold text-white transition hover:bg-white/10"
+          className="rounded-xl border border-white/40 px-4 py-3 font-bold text-white transition hover:bg-white/10"
         >
           LOGOUT
         </button>

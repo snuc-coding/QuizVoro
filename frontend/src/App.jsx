@@ -1,5 +1,4 @@
-
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Routes,
   Route,
@@ -20,109 +19,14 @@ import CreateQuizPage from "./pages/CreateQuizPage";
 import QuizManagementPage from "./pages/QuizManagementPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
 import HostDashboard from "./pages/HostDashboard";
+import { isAdminAuthenticated } from "./services/api";
 
-function isAdminLoggedIn() {
-  return sessionStorage.getItem("asterisAdminLoggedIn") === "true";
-}
-
-// Protect admin-only pages.
+// Protect admin-only pages
 function AdminRoute({ children }) {
-  return isAdminLoggedIn() ? (
+  return isAdminAuthenticated() ? (
     children
   ) : (
     <Navigate to="/admin/login" replace />
-  );
-}
-
-// Load the selected saved quiz and display the new host dashboard.
-function HostDashboardRoute() {
-  const navigate = useNavigate();
-  const [quiz, setQuiz] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    try {
-      const selectedQuizId = sessionStorage.getItem(
-        "asterisSelectedQuizId"
-      );
-
-      const savedQuizzes = JSON.parse(
-        localStorage.getItem("asterisQuizzes") || "[]"
-      );
-
-      const selectedQuiz = Array.isArray(savedQuizzes)
-        ? savedQuizzes.find(
-            (item) =>
-              String(item.id) === String(selectedQuizId)
-          )
-        : null;
-
-      if (selectedQuiz) {
-        setQuiz(selectedQuiz);
-      }
-    } catch (error) {
-      console.error("Unable to load selected quiz:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  function handleOpenProjector() {
-    if (!quiz) return;
-
-    const projectorWindow = window.open(
-      `/stage?quizId=${encodeURIComponent(quiz.id)}`,
-      "quizvoro-projector"
-    );
-
-    if (projectorWindow) {
-      projectorWindow.focus();
-    } else {
-      alert(
-        "The projector window was blocked. Allow pop-ups and try again."
-      );
-    }
-  }
-
-  if (loading) {
-    return (
-      <main className="quiz-background flex min-h-screen items-center justify-center text-white">
-        Loading quiz...
-      </main>
-    );
-  }
-
-  if (!quiz) {
-    return (
-      <main className="quiz-background flex min-h-screen flex-col items-center justify-center gap-4 px-5 text-white">
-        <h1 className="brand-font text-3xl font-bold">
-          No quiz selected
-        </h1>
-
-        <p className="text-center text-purple-100/80">
-          Please return to Saved Quizzes and select a quiz.
-        </p>
-
-        <button
-          type="button"
-          onClick={() => navigate("/admin/quizzes")}
-          className="rounded-xl bg-[#91F0DF] px-5 py-3 font-bold text-[#31064D]"
-        >
-          BACK TO SAVED QUIZZES
-        </button>
-      </main>
-    );
-  }
-
-  return (
-    <HostDashboard
-      quiz={quiz}
-      onOpenProjector={handleOpenProjector}
-      onBack={() => navigate("/admin/quizzes")}
-      onStartQuiz={() => {
-        // HostDashboard updates the shared live state.
-      }}
-    />
   );
 }
 
@@ -130,15 +34,13 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Participant join-flow state.
+  // Participant join-flow state for top-bar or direct routes
   const [pin, setPin] = useState("");
   const [nickname, setNickname] = useState("");
-
-  // Admin login prompt state.
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [pendingAction, setPendingAction] = useState("create");
 
-  const loggedIn = isAdminLoggedIn();
+  const loggedIn = isAdminAuthenticated();
 
   function handleTabChange(tab) {
     if (tab === "JOIN") {
@@ -149,11 +51,7 @@ function App() {
     }
 
     if (loggedIn) {
-      navigate(
-        tab === "CREATE"
-          ? "/admin/create"
-          : "/admin/quizzes"
-      );
+      navigate(tab === "CREATE" ? "/admin/create" : "/admin/quizzes");
       return;
     }
 
@@ -163,16 +61,9 @@ function App() {
 
   function handleConfirmLogin() {
     setShowLoginPrompt(false);
-
     navigate(`/admin/login?mode=${pendingAction}`, {
       state: { fromPrompt: true },
     });
-  }
-
-  // Participant flow: PIN -> nickname -> lobby.
-  function handleJoin(gamePin) {
-    setPin(gamePin);
-    navigate("/nickname");
   }
 
   function handleContinue(name) {
@@ -180,173 +71,30 @@ function App() {
     navigate("/lobby");
   }
 
-  function handleLogout() {
-    sessionStorage.removeItem("asterisAdminLoggedIn");
-    sessionStorage.removeItem("asterisAdminUsername");
-    sessionStorage.removeItem("asterisSelectedQuizId");
-
-    setPin("");
-    setNickname("");
-    setShowLoginPrompt(false);
-
-    navigate("/", { replace: true });
-  }
-
   const activeTab =
     location.pathname === "/"
       ? "JOIN"
       : location.pathname.startsWith("/admin/create")
-        ? "CREATE"
-        : location.pathname === "/admin/quizzes" ||
-            location.pathname === "/admin/presentation" ||
-            location.pathname === "/stage"
-          ? "PRESENT"
-          : "";
+      ? "CREATE"
+      : location.pathname === "/admin/quizzes" ||
+        location.pathname === "/admin/presentation" ||
+        location.pathname === "/admin/host"
+      ? "PRESENT"
+      : "";
 
-  const tabs = [
-    {
-      label: "CREATE",
-      color: "bg-[#C51E50] hover:bg-[#D6295D]",
-      text: "text-white",
-    },
-    {
-      label: "PRESENT",
-      color: "bg-[#E6D99D] hover:bg-[#F0E4AE]",
-      text: "text-[#321044]",
-    },
-    {
-      label: "JOIN",
-      color: "bg-[#91F0DF] hover:bg-[#ACF7EA]",
-      text: "text-[#17232A]",
-    },
-  ];
+  const isBareScreen =
+    location.pathname === "/admin/login" ||
+    location.pathname === "/admin/dashboard" ||
+    location.pathname.startsWith("/admin/create") ||
+    location.pathname === "/admin/quizzes" ||
+    location.pathname.startsWith("/admin/host") ||
+    location.pathname === "/stage" ||
+    location.pathname.startsWith("/game/");
 
-  return (
-    <div className="quiz-background min-h-screen text-white">
+  if (isBareScreen) {
+    return (
       <Routes>
-        {/* Public home and PIN entry. */}
-        <Route
-          path="/"
-          element={
-            loggedIn ? (
-              <Navigate to="/admin/dashboard" replace />
-            ) : (
-              <>
-                <header className="relative z-20 flex min-h-[78px] w-full items-center justify-between gap-3 border-b border-white/15 bg-[#260638]/90 px-4 backdrop-blur-md sm:px-8 lg:px-14">
-                  <button
-                    type="button"
-                    onClick={() => navigate("/")}
-                    className="brand-font shrink-0 text-3xl leading-none text-white sm:text-4xl"
-                    aria-label="Asteris home"
-                  >
-                    Asteris
-                  </button>
-
-                  <nav
-                    aria-label="Main navigation"
-                    className="flex flex-wrap items-center justify-end gap-2 sm:gap-3"
-                  >
-                    {tabs.map((tab) => (
-                      <button
-                        key={tab.label}
-                        type="button"
-                        aria-current={
-                          activeTab === tab.label
-                            ? "page"
-                            : undefined
-                        }
-                        onClick={() =>
-                          handleTabChange(tab.label)
-                        }
-                        className={`nav-font flex min-h-[44px] items-center justify-center rounded-xl border border-black/10 px-3 py-2 text-sm font-bold transition hover:-translate-y-0.5 hover:brightness-105 sm:min-w-[100px] sm:px-5 sm:text-base ${tab.color} ${tab.text} ${
-                          activeTab === tab.label
-                            ? "shadow-md ring-2 ring-white/60 ring-offset-2 ring-offset-[#260638]"
-                            : "shadow-sm"
-                        }`}
-                      >
-                        {tab.label}
-                      </button>
-                    ))}
-                  </nav>
-                </header>
-
-                <main className="relative z-10 flex min-h-[calc(100svh-78px)] items-center justify-center px-4 py-12">
-                  <JoinPage onJoin={handleJoin} />
-                </main>
-              </>
-            )
-          }
-        />
-
-        {/* Participant nickname page. */}
-        <Route
-          path="/nickname"
-          element={
-            <main className="flex min-h-screen w-full items-center justify-center px-4 py-12">
-              <NicknamePage
-                pin={pin}
-                onContinue={handleContinue}
-                onBack={() => navigate("/")}
-              />
-            </main>
-          }
-        />
-
-        {/* Participant waiting lobby. */}
-        <Route
-          path="/lobby"
-          element={
-            <div className="flex min-h-screen w-full flex-col items-center justify-center gap-4 px-4 py-8">
-              <WaitingLobby
-                nickname={nickname}
-                pin={pin}
-                onBack={() => navigate("/nickname")}
-              />
-
-              {import.meta.env.DEV && (
-                <button
-                  type="button"
-                  onClick={() => navigate("/question")}
-                  className="rounded-xl bg-white px-6 py-3 font-bold text-[#31064D]"
-                >
-                  TEST QUESTION SCREEN
-                </button>
-              )}
-            </div>
-          }
-        />
-
-        {/* Participant question screen. */}
-        <Route
-          path="/question"
-          element={<QuestionScreen />}
-        />
-
-        {/* QR-based participant join flow. */}
-        <Route
-          path="/join"
-          element={<JoinFlow />}
-        />
-
-        {/* Projector screen. */}
-        <Route
-          path="/stage"
-          element={<ProjectorPage />}
-        />
-
-        {/* Admin login. */}
-        <Route
-          path="/admin/login"
-          element={
-            loggedIn ? (
-              <Navigate to="/admin/dashboard" replace />
-            ) : (
-              <AdminLoginPage />
-            )
-          }
-        />
-
-        {/* Admin dashboard. */}
+        <Route path="/admin/login" element={<AdminLoginPage />} />
         <Route
           path="/admin/dashboard"
           element={
@@ -355,8 +103,6 @@ function App() {
             </AdminRoute>
           }
         />
-
-        {/* Create quiz. */}
         <Route
           path="/admin/create"
           element={
@@ -365,17 +111,6 @@ function App() {
             </AdminRoute>
           }
         />
-
-        <Route
-          path="/admin/create/questions"
-          element={
-            <AdminRoute>
-              <CreateQuizPage />
-            </AdminRoute>
-          }
-        />
-
-        {/* Saved quizzes. */}
         <Route
           path="/admin/quizzes"
           element={
@@ -384,85 +119,119 @@ function App() {
             </AdminRoute>
           }
         />
-
-        {/* Selected quiz: use the new HostDashboard design. */}
         <Route
-          path="/admin/presentation"
+          path="/admin/host"
           element={
             <AdminRoute>
-              <HostDashboardRoute />
+              <HostDashboard />
             </AdminRoute>
           }
         />
-
-        {/* Unknown URLs. */}
-        <Route
-          path="*"
-          element={
-            <Navigate
-              to={loggedIn ? "/admin/dashboard" : "/"}
-              replace
-            />
-          }
-        />
+        <Route path="/stage" element={<ProjectorPage />} />
+        <Route path="/game/:gameId" element={<QuestionScreen />} />
       </Routes>
+    );
+  }
 
-      {/* Admin login confirmation dialog. */}
-      {showLoginPrompt && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm"
-          onClick={() => setShowLoginPrompt(false)}
+  return (
+    <div className="quiz-background min-h-screen text-white">
+      {/* Top Navbar */}
+      <header className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+        <button
+          onClick={() => navigate("/")}
+          className="brand-font text-3xl font-extrabold tracking-wider"
         >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="login-prompt-title"
-            className="w-full max-w-md rounded-3xl bg-white p-7 text-center text-[#31064D] shadow-2xl sm:p-9"
-            onClick={(event) => event.stopPropagation()}
+          Asteris
+        </button>
+
+        <nav className="flex items-center gap-2">
+          <button
+            onClick={() => handleTabChange("JOIN")}
+            className={`rounded-xl px-4 py-2 font-bold text-sm transition ${
+              activeTab === "JOIN"
+                ? "bg-white text-[#31064D]"
+                : "text-white/80 hover:bg-white/10"
+            }`}
           >
-            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-purple-100">
-              <span className="text-3xl" aria-hidden="true">
-                🔐
-              </span>
-            </div>
+            JOIN
+          </button>
+          <button
+            onClick={() => handleTabChange("CREATE")}
+            className={`rounded-xl px-4 py-2 font-bold text-sm transition ${
+              activeTab === "CREATE"
+                ? "bg-[#C51E50] text-white"
+                : "text-white/80 hover:bg-white/10"
+            }`}
+          >
+            CREATE
+          </button>
+          <button
+            onClick={() => handleTabChange("PRESENT")}
+            className={`rounded-xl px-4 py-2 font-bold text-sm transition ${
+              activeTab === "PRESENT"
+                ? "bg-[#E6D99D] text-[#31064D]"
+                : "text-white/80 hover:bg-white/10"
+            }`}
+          >
+            PRESENT
+          </button>
+        </nav>
+      </header>
 
-            <h2
-              id="login-prompt-title"
-              className="brand-font text-3xl font-bold"
-            >
-              Admin Login Required
-            </h2>
+      {/* Main Routes */}
+      <main className="flex min-h-[calc(100vh-80px)] items-center justify-center p-4">
+        <Routes>
+          <Route path="/" element={<JoinPage />} />
+          <Route
+            path="/nickname"
+            element={
+              <NicknamePage
+                pin={pin}
+                onContinue={handleContinue}
+                onBack={() => navigate("/")}
+              />
+            }
+          />
+          <Route
+            path="/lobby"
+            element={
+              <WaitingLobby
+                pin={pin}
+                nickname={nickname}
+                onBack={() => navigate("/nickname")}
+              />
+            }
+          />
+          <Route path="/join-flow" element={<JoinFlow />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
 
-            <p className="mt-4 leading-7 text-gray-600">
-              You need to log in as an admin to{" "}
-              {pendingAction === "create"
-                ? "create and manage quizzes"
-                : "select and present quizzes"}
-              .
+      {/* Login Prompt Modal */}
+      {showLoginPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-7 text-[#31064D] shadow-2xl text-center">
+            <h3 className="brand-font text-2xl font-bold">Admin Sign In Required</h3>
+            <p className="mt-2 text-sm text-gray-600">
+              You must sign in as an administrator to {pendingAction} quizzes.
             </p>
-
-            <p className="mt-2 text-gray-600">
-              Would you like to log in now?
-            </p>
-
-            <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+            <div className="mt-6 flex flex-col gap-2.5">
               <button
                 type="button"
                 onClick={handleConfirmLogin}
-                className="flex-1 rounded-xl bg-[#31064D] px-5 py-3 font-bold text-white transition hover:bg-[#49205C]"
+                className="w-full rounded-xl bg-[#31064D] py-3 font-bold text-white transition hover:bg-[#49205C]"
               >
-                YES, LOGIN
+                SIGN IN
               </button>
-
               <button
                 type="button"
                 onClick={() => setShowLoginPrompt(false)}
-                className="flex-1 rounded-xl border border-gray-300 px-5 py-3 font-bold text-[#31064D] transition hover:bg-gray-100"
+                className="w-full rounded-xl border border-gray-300 py-2.5 font-semibold text-gray-600 hover:bg-gray-50"
               >
-                CANCEL
+                Cancel
               </button>
             </div>
-          </section>
+          </div>
         </div>
       )}
     </div>

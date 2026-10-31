@@ -1,38 +1,15 @@
+import { participantApi } from "./api";
 
-import { dummyQuestions } from "../data/questions";
-import { apiRequest } from "./api";
-
-// Keep true until the backend is ready.
-const USE_MOCK_DATA = true;
-
-// Get a question by its index.
-export async function getCurrentQuestion(gameId, questionIndex = 0) {
-  if (USE_MOCK_DATA) {
-    // Return the requested mock question.
-    return dummyQuestions[questionIndex] ?? null;
-  }
-
-  // Real backend request.
-  // The backend API contract may need adjustment later.
-  return apiRequest(
-    `/api/v1/games/${gameId}/current-question`
-  );
+// Get current open question for a live game
+export async function getCurrentQuestion(gameId) {
+  return participantApi.getCurrentQuestion(gameId);
 }
 
-// Submit an answer using mock behavior for now.
-export async function submitMockAnswer({
-  gameId,
-  questionId,
-  selectedOption,
-}) {
-  console.log("Mock answer submitted:", {
-    gameId,
-    questionId,
-    selectedOption,
+// Submit participant answer to real backend API
+export async function submitAnswer({ gameId, questionId, optionId = null, selectedOption = null }) {
+  return participantApi.submitAnswer(gameId, {
+    question_id: questionId,
+    option_id: optionId,
+    selected_option: selectedOption,
   });
-
-  return {
-    success: true,
-    message: "Answer received (mock)",
-  };
 }
