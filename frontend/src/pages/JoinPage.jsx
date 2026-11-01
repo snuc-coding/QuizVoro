@@ -37,11 +37,13 @@ function JoinPage() {
     setLoading(true);
 
     try {
+      // Existing backend integration
       const joinData = await participantApi.joinGame(
         cleanPin,
         cleanNick
       );
 
+      // Existing game navigation and participant data
       navigate(`/game/${joinData.game_id}`, {
         state: {
           gameId: joinData.game_id,
@@ -53,6 +55,7 @@ function JoinPage() {
       });
     } catch (err) {
       console.error("Join game failed:", err);
+
       setError(
         err.message ||
           "Could not join game. Please verify the PIN and nickname."
@@ -65,7 +68,7 @@ function JoinPage() {
   return (
     <section className="flex w-full max-w-md flex-col items-center">
 
-      {/* ASTERIS LOGO */}
+      {/* ASTERIS BRANDING */}
       <h1 className="brand-font mb-1 text-center text-6xl leading-[1.15] text-white sm:text-7xl">
         Asteris!
       </h1>
@@ -74,7 +77,7 @@ function JoinPage() {
         THINK FAST. OWN THE GAME.
       </p>
 
-      {/* JOIN FORM */}
+      {/* JOIN GAME CARD */}
       <form
         onSubmit={handleSubmit}
         className="w-full rounded-3xl bg-white px-6 py-8 text-[#31064D] shadow-2xl sm:px-9 sm:py-9"
@@ -83,10 +86,11 @@ function JoinPage() {
           JOIN GAME
         </h2>
 
+        {/* ERROR MESSAGE */}
         {error && (
           <div
             role="alert"
-            className="mb-5 rounded-xl border border-red-200 bg-red-50 p-3.5 text-center text-sm font-medium text-red-700"
+            className="mb-5 rounded-xl border border-red-200 bg-red-50 p-3.5 text-sm font-medium text-red-700"
           >
             {error}
           </div>
@@ -149,13 +153,13 @@ function JoinPage() {
             />
           </div>
 
-          {/* JOIN BUTTON */}
+          {/* ENTER GAME */}
           <button
             type="submit"
             disabled={loading}
-            className="brand-font mt-4 min-h-[64px] w-full rounded-2xl bg-[#21112A] px-4 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-[#38204C] disabled:cursor-not-allowed disabled:opacity-50"
+            className="brand-font mt-4 min-h-[64px] w-full rounded-2xl bg-[#31064D] px-4 text-xl font-bold text-white shadow-lg transition hover:bg-[#49205C] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {loading ? "JOINING..." : "ENTER GAME →"}
+            {loading ? "JOINING..." : "ENTER GAME"}
           </button>
 
         </div>

@@ -162,13 +162,13 @@ function App() {
     <div className="quiz-background min-h-screen text-white">
 
       {/* TOP NAVBAR */}
-      <header className="sticky top-0 z-40 flex w-full flex-wrap items-center justify-between gap-4 border-b border-white/15 bg-[#310D40]/95 px-5 py-3 backdrop-blur-md sm:px-8">
+      <header className="sticky top-0 z-40 flex w-full flex-nowrap items-center justify-between gap-2 border-b border-white/15 bg-[#310D40]/95 px-3 py-3 backdrop-blur-md sm:gap-4 sm:px-8">
 
         {/* ASTERIS LOGO */}
         <button
           type="button"
           onClick={() => navigate("/")}
-          className="brand-font text-3xl font-extrabold tracking-wide text-white transition duration-200 hover:scale-105 sm:text-4xl"
+          className="brand-font shrink-0 whitespace-nowrap text-2xl font-extrabold tracking-wide text-white transition duration-200 hover:scale-105 sm:text-4xl"
           aria-label="Asteris home"
         >
           Asteris
@@ -177,7 +177,7 @@ function App() {
         {/* NAVIGATION BUTTONS */}
         <nav
           aria-label="Main navigation"
-          className="flex flex-wrap items-center gap-2 sm:gap-3"
+          className="flex shrink-0 flex-nowrap items-center gap-1.5 sm:gap-3"
         >
 
           {/* JOIN */}
@@ -187,7 +187,7 @@ function App() {
             aria-current={
               activeTab === "JOIN" ? "page" : undefined
             }
-            className={`nav-font min-h-[46px] min-w-[90px] rounded-xl border-2 px-5 py-2.5 text-sm font-extrabold tracking-wide text-[#31064D] transition-all duration-200 hover:-translate-y-0.5 hover:brightness-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#91F0DF] ${
+            className={`nav-font flex min-h-[42px] min-w-0 items-center justify-center whitespace-nowrap rounded-xl border-2 px-3 py-2 text-[11px] font-extrabold tracking-wide text-[#31064D] transition-all duration-200 hover:-translate-y-0.5 hover:brightness-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#91F0DF] sm:min-h-[46px] sm:min-w-[90px] sm:px-5 sm:py-2.5 sm:text-sm ${
               activeTab === "JOIN"
                 ? "border-[#91F0DF] bg-[#91F0DF] shadow-[0_0_0_2px_rgba(145,240,223,0.2)]"
                 : "border-transparent bg-[#91F0DF]"
@@ -203,7 +203,7 @@ function App() {
             aria-current={
               activeTab === "CREATE" ? "page" : undefined
             }
-            className={`nav-font min-h-[46px] min-w-[100px] rounded-xl border-2 px-5 py-2.5 text-sm font-extrabold tracking-wide text-white transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#F4A6BE] ${
+            className={`nav-font flex min-h-[42px] min-w-0 items-center justify-center whitespace-nowrap rounded-xl border-2 px-3 py-2 text-[11px] font-extrabold tracking-wide text-white transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#F4A6BE] sm:min-h-[46px] sm:min-w-[100px] sm:px-5 sm:py-2.5 sm:text-sm ${
               activeTab === "CREATE"
                 ? "border-[#F4A6BE] bg-[#C51E50] shadow-[0_0_0_2px_rgba(197,30,80,0.2)]"
                 : "border-transparent bg-[#C51E50]"
@@ -219,7 +219,7 @@ function App() {
             aria-current={
               activeTab === "PRESENT" ? "page" : undefined
             }
-            className={`nav-font min-h-[46px] min-w-[110px] rounded-xl border-2 px-5 py-2.5 text-sm font-extrabold tracking-wide text-[#321044] transition-all duration-200 hover:-translate-y-0.5 hover:brightness-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#91F0DF] ${
+            className={`nav-font flex min-h-[42px] min-w-0 items-center justify-center whitespace-nowrap rounded-xl border-2 px-3 py-2 text-[11px] font-extrabold tracking-wide text-[#321044] transition-all duration-200 hover:-translate-y-0.5 hover:brightness-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#91F0DF] sm:min-h-[46px] sm:min-w-[110px] sm:px-5 sm:py-2.5 sm:text-sm ${
               activeTab === "PRESENT"
                 ? "border-[#91F0DF] bg-[#E6D99D] shadow-[0_0_0_2px_rgba(145,240,223,0.2)]"
                 : "border-transparent bg-[#E6D99D]"
