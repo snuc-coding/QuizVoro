@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { quizApi, clearAdminToken } from "../services/api";
@@ -54,7 +55,9 @@ function CreateQuizPage() {
       updateQuestion(questionIndex, "mediaPreview", "");
       return;
     }
+
     const previewUrl = URL.createObjectURL(file);
+
     setQuestions((currentQuestions) =>
       currentQuestions.map((question, index) =>
         index === questionIndex
@@ -97,6 +100,7 @@ function CreateQuizPage() {
     setError("");
 
     const cleanTitle = title.trim();
+
     if (!cleanTitle) {
       setError("Please enter a quiz title.");
       return;
@@ -137,6 +141,7 @@ function CreateQuizPage() {
       // 3. Create Questions & Upload Media if any
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
+
         const formattedOptions = q.options.map((optText, optIdx) => ({
           option_text: optText.trim(),
           is_correct: optIdx === Number(q.correctAnswer),
@@ -156,7 +161,10 @@ function CreateQuizPage() {
           try {
             await quizApi.uploadMedia(createdQ.id, q.mediaFile);
           } catch (uploadErr) {
-            console.warn(`Media upload warning for question ${i + 1}:`, uploadErr);
+            console.warn(
+              `Media upload warning for question ${i + 1}:`,
+              uploadErr
+            );
           }
         }
       }
@@ -165,7 +173,10 @@ function CreateQuizPage() {
       navigate("/admin/quizzes", { replace: true });
     } catch (err) {
       console.error("Failed to save quiz to backend:", err);
-      setError(err.message || "Failed to save quiz to backend. Please check connectivity.");
+      setError(
+        err.message ||
+          "Failed to save quiz to backend. Please check connectivity."
+      );
     } finally {
       setSubmitting(false);
     }
@@ -175,222 +186,349 @@ function CreateQuizPage() {
     navigate("/admin/dashboard");
   }
 
+  const inputStyle =
+    "w-full rounded-xl border border-[#DED9E5] bg-[#F4F2F7] px-4 py-3 text-[#321044] outline-none transition placeholder:text-gray-400 focus:border-[#7950A8] focus:ring-2 focus:ring-purple-100";
+
   return (
-    <main className="min-h-screen px-5 py-8 text-[#31064D] sm:px-8 lg:px-12">
+    <main className="min-h-screen bg-transparent px-5 py-8 sm:px-8 lg:px-12">
       <div className="mx-auto w-full max-w-5xl">
-        <header className="mb-12">
+
+        {/* HEADER */}
+        <header className="mb-10">
           <div className="flex min-h-[72px] items-center justify-between gap-4 border-b border-white/20 pb-6">
+
             <button
               type="button"
               onClick={() => navigate("/admin/dashboard")}
               className="brand-font text-4xl font-bold leading-tight text-white sm:text-5xl"
               aria-label="Go to admin dashboard"
             >
-              Asteris
+              Asteris!
             </button>
 
             <button
               type="button"
               onClick={handleLogout}
-              className="shrink-0 rounded-xl border border-white/40 px-5 py-3 font-bold text-white transition hover:bg-white/10"
+              className="nav-font shrink-0 rounded-xl border border-white/40 px-5 py-3 font-bold text-white transition hover:bg-white/10"
             >
               LOGOUT
             </button>
           </div>
 
+          {/* PAGE INTRO */}
           <section className="pb-4 pt-10 sm:pt-12">
-            <p className="mb-3 text-sm font-bold uppercase tracking-[0.22em] text-[#91F0DF]">
-              QUIZ BUILDER
+            <p className="mb-3 text-sm font-bold uppercase tracking-[0.22em] text-[#E6D99D]">
+              ASTERIS • QUIZ BUILDER
             </p>
 
-            <h2 className="brand-font text-4xl font-bold leading-tight text-white sm:text-5xl">
+            <h1 className="brand-font text-4xl font-bold leading-tight text-white sm:text-5xl">
               Create your quiz
-            </h2>
+            </h1>
 
-            <p className="mt-5 max-w-3xl text-base leading-8 text-white/85 sm:text-lg">
-              Bring your questions to life. Add text, attach media, configure options,
-              and manage rounds directly with the backend.
+            <p className="mt-4 max-w-3xl text-base leading-8 text-white/85 sm:text-lg">
+              Bring your questions to life. Add text, attach media,
+              configure your answer options, and prepare for your next
+              Asteris game.
             </p>
           </section>
         </header>
 
+        {/* ERROR MESSAGE */}
         {error && (
-          <div className="mb-6 rounded-2xl bg-red-100 p-4 text-red-800 border border-red-300">
+          <div
+            role="alert"
+            className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 font-medium text-red-700 shadow-sm"
+          >
             {error}
           </div>
         )}
 
-        <form onSubmit={handleSave} className="space-y-6">
-          <section className="rounded-2xl bg-white p-6 shadow-xl sm:p-8">
-            <label htmlFor="quiz-title" className="mb-2 block font-bold">
-              Quiz title *
+        <form onSubmit={handleSave} className="space-y-7">
+
+          {/* QUIZ INFORMATION */}
+          <section className="rounded-3xl border border-white/50 bg-white p-6 shadow-xl sm:p-8">
+
+            <div className="mb-6 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F5E9EF] text-lg font-bold text-[#C51E50]">
+                01
+              </div>
+
+              <div>
+                <h2 className="nav-font text-xl font-bold text-[#321044]">
+                  Quiz Information
+                </h2>
+                <p className="text-sm text-gray-500">
+                  Give your quiz a name and description.
+                </p>
+              </div>
+            </div>
+
+            <label htmlFor="quiz-title" className="mb-2 block text-sm font-bold text-[#321044]">
+              Quiz Title *
             </label>
+
             <input
               id="quiz-title"
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="e.g. Science & Technology Quiz"
               required
-              className="w-full rounded-xl border border-gray-300 px-4 py-3 outline-none focus:ring-2 focus:ring-purple-300"
+              className={inputStyle}
             />
 
-            <label htmlFor="quiz-desc" className="mt-4 mb-2 block font-bold">
+            <label htmlFor="quiz-desc" className="mb-2 mt-5 block text-sm font-bold text-[#321044]">
               Description (optional)
             </label>
+
             <textarea
               id="quiz-desc"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               placeholder="Brief overview of the quiz..."
-              rows={2}
-              className="w-full rounded-xl border border-gray-300 px-4 py-3 outline-none focus:ring-2 focus:ring-purple-300"
+              rows={3}
+              className={`${inputStyle} resize-y`}
             />
           </section>
 
+          {/* QUESTIONS */}
           {questions.map((question, questionIndex) => (
             <section
               key={question.id}
-              className="rounded-2xl bg-white p-6 shadow-xl sm:p-8"
+              className="overflow-hidden rounded-3xl border border-white/50 bg-white shadow-xl"
             >
-              <div className="flex items-center justify-between border-b border-gray-200 pb-4">
-                <h3 className="font-bold text-lg text-[#31064D]">
-                  Question {questionIndex + 1}
-                </h3>
+
+              {/* QUESTION HEADER */}
+              <div className="flex items-center justify-between gap-3 border-b border-[#EAE6EF] bg-[#F8F6FA] px-6 py-5 sm:px-8">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#321044] text-lg font-bold text-white">
+                    {String(questionIndex + 1).padStart(2, "0")}
+                  </div>
+
+                  <div>
+                    <h3 className="nav-font text-lg font-bold text-[#321044]">
+                      Question {questionIndex + 1}
+                    </h3>
+                    <p className="text-xs text-gray-500">
+                      Multiple choice question
+                    </p>
+                  </div>
+                </div>
+
                 {questions.length > 1 && (
                   <button
                     type="button"
                     onClick={() => removeQuestion(questionIndex)}
-                    className="text-sm font-semibold text-red-600 hover:text-red-800"
+                    className="rounded-xl px-3 py-2 text-sm font-bold text-red-600 transition hover:bg-red-50"
                   >
-                    Delete Question
+                    DELETE
                   </button>
                 )}
               </div>
 
-              <div className="mt-4">
-                <label className="mb-2 block font-semibold text-sm">
-                  Question Text *
-                </label>
-                <input
-                  type="text"
-                  value={question.text}
-                  onChange={(e) => updateQuestion(questionIndex, "text", e.target.value)}
-                  placeholder="Enter the question text"
-                  required
-                  className="w-full rounded-xl border border-gray-300 px-4 py-2.5 outline-none focus:ring-2 focus:ring-purple-300"
-                />
-              </div>
+              <div className="space-y-6 p-6 sm:p-8">
 
-              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {/* QUESTION TEXT */}
                 <div>
-                  <label className="mb-2 block font-semibold text-sm">
-                    Time Limit (seconds)
+                  <label className="mb-2 block text-sm font-bold text-[#321044]">
+                    Question Text *
                   </label>
+
                   <input
-                    type="number"
-                    min={5}
-                    max={300}
-                    value={question.duration}
-                    onChange={(e) => updateQuestion(questionIndex, "duration", Number(e.target.value))}
-                    className="w-full rounded-xl border border-gray-300 px-4 py-2 outline-none focus:ring-2 focus:ring-purple-300"
+                    type="text"
+                    value={question.text}
+                    onChange={(e) =>
+                      updateQuestion(questionIndex, "text", e.target.value)
+                    }
+                    placeholder="Enter your question here..."
+                    required
+                    className={inputStyle}
                   />
                 </div>
-                <div>
-                  <label className="mb-2 block font-semibold text-sm">
-                    Points
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={10000}
-                    value={question.points}
-                    onChange={(e) => updateQuestion(questionIndex, "points", Number(e.target.value))}
-                    className="w-full rounded-xl border border-gray-300 px-4 py-2 outline-none focus:ring-2 focus:ring-purple-300"
-                  />
-                </div>
-              </div>
 
-              <div className="mt-4">
-                <label className="mb-2 block font-semibold text-sm">
-                  Attach Media (image, audio, or video - optional)
-                </label>
-                <input
-                  type="file"
-                  accept="image/*,audio/*,video/*"
-                  onChange={(e) => handleFileChange(questionIndex, e.target.files?.[0] || null)}
-                  className="w-full rounded-xl border border-gray-300 p-2 text-sm text-gray-700 file:mr-4 file:rounded-lg file:border-0 file:bg-[#EDE4F5] file:px-4 file:py-2 file:font-semibold file:text-[#31064D] hover:file:bg-[#DDD0EB]"
-                />
-                {question.mediaPreview && (
-                  <div className="mt-2">
-                    <p className="text-xs text-gray-500 mb-1">Preview:</p>
-                    <img
-                      src={question.mediaPreview}
-                      alt="Question media preview"
-                      className="max-h-40 rounded-lg border object-contain"
+                {/* TIME AND POINTS */}
+                <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-2 block text-sm font-bold text-[#321044]">
+                      Time Limit (seconds)
+                    </label>
+
+                    <input
+                      type="number"
+                      min={5}
+                      max={300}
+                      value={question.duration}
+                      onChange={(e) =>
+                        updateQuestion(
+                          questionIndex,
+                          "duration",
+                          Number(e.target.value)
+                        )
+                      }
+                      className={inputStyle}
                     />
                   </div>
-                )}
-              </div>
 
-              <div className="mt-6">
-                <p className="mb-3 font-semibold text-sm">
-                  Answer Options (Select the radio button for the correct answer) *
-                </p>
-                <div className="space-y-3">
-                  {question.options.map((option, optIdx) => (
-                    <div key={optIdx} className="flex items-center gap-3">
-                      <input
-                        type="radio"
-                        id={`q${questionIndex}-opt${optIdx}`}
-                        name={`correctAnswer-${questionIndex}`}
-                        checked={Number(question.correctAnswer) === optIdx}
-                        onChange={() => updateQuestion(questionIndex, "correctAnswer", optIdx)}
-                        className="h-5 w-5 accent-[#31064D]"
-                      />
-                      <span className="font-bold text-sm w-6">
-                        {String.fromCharCode(65 + optIdx)}:
-                      </span>
-                      <input
-                        type="text"
-                        value={option}
-                        onChange={(e) => updateOption(questionIndex, optIdx, e.target.value)}
-                        placeholder={`Option ${String.fromCharCode(65 + optIdx)}`}
-                        required
-                        className="flex-1 rounded-xl border border-gray-300 px-4 py-2 outline-none focus:ring-2 focus:ring-purple-300"
+                  <div>
+                    <label className="mb-2 block text-sm font-bold text-[#321044]">
+                      Points
+                    </label>
+
+                    <input
+                      type="number"
+                      min={0}
+                      max={10000}
+                      value={question.points}
+                      onChange={(e) =>
+                        updateQuestion(
+                          questionIndex,
+                          "points",
+                          Number(e.target.value)
+                        )
+                      }
+                      className={inputStyle}
+                    />
+                  </div>
+                </div>
+
+                {/* MEDIA UPLOAD */}
+                <div className="rounded-2xl border border-dashed border-[#C9B9D8] bg-[#F8F5FB] p-5">
+                  <label className="mb-3 block text-sm font-bold text-[#321044]">
+                    Attach Media
+                  </label>
+
+                  <p className="mb-4 text-xs text-gray-500">
+                    Optional: Add an image, audio clip, or video to your question.
+                  </p>
+
+                  <input
+                    type="file"
+                    accept="image/*,audio/*,video/*"
+                    onChange={(e) =>
+                      handleFileChange(
+                        questionIndex,
+                        e.target.files?.[0] || null
+                      )
+                    }
+                    className="w-full rounded-xl border border-[#DED9E5] bg-white p-3 text-sm text-gray-700 file:mr-4 file:rounded-lg file:border-0 file:bg-[#321044] file:px-4 file:py-2 file:font-semibold file:text-white hover:file:bg-[#49205C]"
+                  />
+
+                  {question.mediaPreview && (
+                    <div className="mt-4">
+                      <p className="mb-2 text-xs font-bold text-gray-500">
+                        MEDIA PREVIEW
+                      </p>
+
+                      <img
+                        src={question.mediaPreview}
+                        alt="Question media preview"
+                        className="max-h-48 rounded-xl border border-[#DED9E5] object-contain"
                       />
                     </div>
-                  ))}
+                  )}
                 </div>
+
+                {/* ANSWER OPTIONS */}
+                <div>
+                  <div className="mb-4">
+                    <h4 className="font-bold text-[#321044]">
+                      Answer Options *
+                    </h4>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Select the radio button beside the correct answer.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    {question.options.map((option, optIdx) => {
+                      const optionColors = [
+                        "border-[#E9B6C5] bg-[#FFF5F7]",
+                        "border-[#E9DFA8] bg-[#FFFCEF]",
+                        "border-[#B9D4F4] bg-[#F3F8FF]",
+                        "border-[#B8E4D8] bg-[#F1FBF7]",
+                      ];
+
+                      return (
+                        <div
+                          key={optIdx}
+                          className={`flex items-center gap-3 rounded-2xl border p-3 transition focus-within:ring-2 focus-within:ring-purple-200 ${optionColors[optIdx]}`}
+                        >
+                          <input
+                            type="radio"
+                            id={`q${questionIndex}-opt${optIdx}`}
+                            name={`correctAnswer-${questionIndex}`}
+                            checked={Number(question.correctAnswer) === optIdx}
+                            onChange={() =>
+                              updateQuestion(
+                                questionIndex,
+                                "correctAnswer",
+                                optIdx
+                              )
+                            }
+                            className="h-5 w-5 accent-[#321044]"
+                          />
+
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-sm font-bold text-[#321044] shadow-sm">
+                            {String.fromCharCode(65 + optIdx)}
+                          </span>
+
+                          <input
+                            type="text"
+                            value={option}
+                            onChange={(e) =>
+                              updateOption(
+                                questionIndex,
+                                optIdx,
+                                e.target.value
+                              )
+                            }
+                            placeholder={`Option ${String.fromCharCode(65 + optIdx)}`}
+                            required
+                            className="min-w-0 flex-1 bg-transparent text-sm font-medium text-[#321044] outline-none placeholder:text-gray-400"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* CORRECT ANSWER INDICATOR */}
+                <div className="rounded-xl bg-[#F1FBF7] px-4 py-3 text-sm text-[#24785B]">
+                  <span className="font-bold">Correct answer: </span>
+                  Option {String.fromCharCode(65 + Number(question.correctAnswer))}
+                </div>
+
               </div>
             </section>
           ))}
 
-          <div className="flex flex-wrap items-center justify-between gap-4 pt-4">
+          {/* ADD QUESTION */}
+          <button
+            type="button"
+            onClick={addQuestion}
+            className="w-full rounded-2xl border-2 border-dashed border-white/60 bg-white/10 px-6 py-5 font-bold text-white transition hover:bg-white/20"
+          >
+            + ADD ANOTHER QUESTION
+          </button>
+
+          {/* BOTTOM ACTIONS */}
+          <div className="flex flex-col-reverse justify-between gap-4 border-t border-white/20 pt-6 sm:flex-row sm:items-center">
+
             <button
               type="button"
-              onClick={addQuestion}
-              className="rounded-xl border border-[#31064D] px-6 py-3 font-bold text-[#31064D] transition hover:bg-[#EDE4F5]"
+              onClick={handleCancel}
+              className="rounded-xl border border-white/40 px-7 py-3.5 font-bold text-white transition hover:bg-white/10"
             >
-              + ADD QUESTION
+              CANCEL
             </button>
 
-            <div className="flex gap-4">
-              <button
-                type="button"
-                onClick={handleCancel}
-                className="rounded-xl border border-white/40 px-6 py-3 font-bold text-white transition hover:bg-white/10"
-              >
-                CANCEL
-              </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="nav-font rounded-xl bg-[#C51E50] px-9 py-4 font-bold text-white shadow-lg transition hover:bg-[#D6295D] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {submitting ? "SAVING QUIZ..." : "SAVE QUIZ →"}
+            </button>
 
-              <button
-                type="submit"
-                disabled={submitting}
-                className="rounded-xl bg-[#91F0DF] px-8 py-3 font-bold text-[#31064D] transition hover:brightness-105 disabled:opacity-50"
-              >
-                {submitting ? "SAVING QUIZ..." : "SAVE QUIZ"}
-              </button>
-            </div>
           </div>
         </form>
       </div>

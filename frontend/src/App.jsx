@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 import {
   Routes,
@@ -19,6 +20,7 @@ import CreateQuizPage from "./pages/CreateQuizPage";
 import QuizManagementPage from "./pages/QuizManagementPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
 import HostDashboard from "./pages/HostDashboard";
+
 import { isAdminAuthenticated } from "./services/api";
 
 // Protect admin-only pages
@@ -34,7 +36,7 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Participant join-flow state for top-bar or direct routes
+  // Participant join-flow state
   const [pin, setPin] = useState("");
   const [nickname, setNickname] = useState("");
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
@@ -42,6 +44,7 @@ function App() {
 
   const loggedIn = isAdminAuthenticated();
 
+  // Navigation handler
   function handleTabChange(tab) {
     if (tab === "JOIN") {
       setPin("");
@@ -51,7 +54,9 @@ function App() {
     }
 
     if (loggedIn) {
-      navigate(tab === "CREATE" ? "/admin/create" : "/admin/quizzes");
+      navigate(
+        tab === "CREATE" ? "/admin/create" : "/admin/quizzes"
+      );
       return;
     }
 
@@ -59,29 +64,34 @@ function App() {
     setShowLoginPrompt(true);
   }
 
+  // Login prompt confirmation
   function handleConfirmLogin() {
     setShowLoginPrompt(false);
+
     navigate(`/admin/login?mode=${pendingAction}`, {
       state: { fromPrompt: true },
     });
   }
 
+  // Nickname continuation
   function handleContinue(name) {
     setNickname(name);
     navigate("/lobby");
   }
 
+  // Active navigation tab
   const activeTab =
     location.pathname === "/"
       ? "JOIN"
       : location.pathname.startsWith("/admin/create")
-      ? "CREATE"
-      : location.pathname === "/admin/quizzes" ||
-        location.pathname === "/admin/presentation" ||
-        location.pathname === "/admin/host"
-      ? "PRESENT"
-      : "";
+        ? "CREATE"
+        : location.pathname === "/admin/quizzes" ||
+            location.pathname === "/admin/presentation" ||
+            location.pathname === "/admin/host"
+          ? "PRESENT"
+          : "";
 
+  // Screens without the public navbar
   const isBareScreen =
     location.pathname === "/admin/login" ||
     location.pathname === "/admin/dashboard" ||
@@ -94,7 +104,11 @@ function App() {
   if (isBareScreen) {
     return (
       <Routes>
-        <Route path="/admin/login" element={<AdminLoginPage />} />
+        <Route
+          path="/admin/login"
+          element={<AdminLoginPage />}
+        />
+
         <Route
           path="/admin/dashboard"
           element={
@@ -103,6 +117,7 @@ function App() {
             </AdminRoute>
           }
         />
+
         <Route
           path="/admin/create"
           element={
@@ -111,6 +126,7 @@ function App() {
             </AdminRoute>
           }
         />
+
         <Route
           path="/admin/quizzes"
           element={
@@ -119,6 +135,7 @@ function App() {
             </AdminRoute>
           }
         />
+
         <Route
           path="/admin/host"
           element={
@@ -127,61 +144,101 @@ function App() {
             </AdminRoute>
           }
         />
-        <Route path="/stage" element={<ProjectorPage />} />
-        <Route path="/game/:gameId" element={<QuestionScreen />} />
+
+        <Route
+          path="/stage"
+          element={<ProjectorPage />}
+        />
+
+        <Route
+          path="/game/:gameId"
+          element={<QuestionScreen />}
+        />
       </Routes>
     );
   }
 
   return (
     <div className="quiz-background min-h-screen text-white">
-      {/* Top Navbar */}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+
+      {/* TOP NAVBAR */}
+      <header className="sticky top-0 z-40 flex w-full flex-wrap items-center justify-between gap-4 border-b border-white/15 bg-[#310D40]/95 px-5 py-3 backdrop-blur-md sm:px-8">
+
+        {/* ASTERIS LOGO */}
         <button
+          type="button"
           onClick={() => navigate("/")}
-          className="brand-font text-3xl font-extrabold tracking-wider"
+          className="brand-font text-3xl font-extrabold tracking-wide text-white transition duration-200 hover:scale-105 sm:text-4xl"
+          aria-label="Asteris home"
         >
           Asteris
         </button>
 
-        <nav className="flex items-center gap-2">
+        {/* NAVIGATION BUTTONS */}
+        <nav
+          aria-label="Main navigation"
+          className="flex flex-wrap items-center gap-2 sm:gap-3"
+        >
+
+          {/* JOIN */}
           <button
+            type="button"
             onClick={() => handleTabChange("JOIN")}
-            className={`rounded-xl px-4 py-2 font-bold text-sm transition ${
+            aria-current={
+              activeTab === "JOIN" ? "page" : undefined
+            }
+            className={`nav-font min-h-[46px] min-w-[90px] rounded-xl border-2 px-5 py-2.5 text-sm font-extrabold tracking-wide text-[#31064D] transition-all duration-200 hover:-translate-y-0.5 hover:brightness-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#91F0DF] ${
               activeTab === "JOIN"
-                ? "bg-white text-[#31064D]"
-                : "text-white/80 hover:bg-white/10"
+                ? "border-[#91F0DF] bg-[#91F0DF] shadow-[0_0_0_2px_rgba(145,240,223,0.2)]"
+                : "border-transparent bg-[#91F0DF]"
             }`}
           >
             JOIN
           </button>
+
+          {/* CREATE */}
           <button
+            type="button"
             onClick={() => handleTabChange("CREATE")}
-            className={`rounded-xl px-4 py-2 font-bold text-sm transition ${
+            aria-current={
+              activeTab === "CREATE" ? "page" : undefined
+            }
+            className={`nav-font min-h-[46px] min-w-[100px] rounded-xl border-2 px-5 py-2.5 text-sm font-extrabold tracking-wide text-white transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#F4A6BE] ${
               activeTab === "CREATE"
-                ? "bg-[#C51E50] text-white"
-                : "text-white/80 hover:bg-white/10"
+                ? "border-[#F4A6BE] bg-[#C51E50] shadow-[0_0_0_2px_rgba(197,30,80,0.2)]"
+                : "border-transparent bg-[#C51E50]"
             }`}
           >
             CREATE
           </button>
+
+          {/* PRESENT */}
           <button
+            type="button"
             onClick={() => handleTabChange("PRESENT")}
-            className={`rounded-xl px-4 py-2 font-bold text-sm transition ${
+            aria-current={
+              activeTab === "PRESENT" ? "page" : undefined
+            }
+            className={`nav-font min-h-[46px] min-w-[110px] rounded-xl border-2 px-5 py-2.5 text-sm font-extrabold tracking-wide text-[#321044] transition-all duration-200 hover:-translate-y-0.5 hover:brightness-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#91F0DF] ${
               activeTab === "PRESENT"
-                ? "bg-[#E6D99D] text-[#31064D]"
-                : "text-white/80 hover:bg-white/10"
+                ? "border-[#91F0DF] bg-[#E6D99D] shadow-[0_0_0_2px_rgba(145,240,223,0.2)]"
+                : "border-transparent bg-[#E6D99D]"
             }`}
           >
             PRESENT
           </button>
+
         </nav>
       </header>
 
-      {/* Main Routes */}
+      {/* MAIN ROUTES */}
       <main className="flex min-h-[calc(100vh-80px)] items-center justify-center p-4">
         <Routes>
-          <Route path="/" element={<JoinPage />} />
+          <Route
+            path="/"
+            element={<JoinPage />}
+          />
+
           <Route
             path="/nickname"
             element={
@@ -192,6 +249,7 @@ function App() {
               />
             }
           />
+
           <Route
             path="/lobby"
             element={
@@ -202,20 +260,35 @@ function App() {
               />
             }
           />
-          <Route path="/join-flow" element={<JoinFlow />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
+
+          <Route
+            path="/join-flow"
+            element={<JoinFlow />}
+          />
+
+          <Route
+            path="*"
+            element={<Navigate to="/" replace />}
+          />
         </Routes>
       </main>
 
-      {/* Login Prompt Modal */}
+      {/* LOGIN PROMPT MODAL */}
       {showLoginPrompt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-sm rounded-3xl bg-white p-7 text-[#31064D] shadow-2xl text-center">
-            <h3 className="brand-font text-2xl font-bold">Admin Sign In Required</h3>
+          <div className="w-full max-w-sm rounded-3xl bg-white p-7 text-center text-[#31064D] shadow-2xl">
+
+            <h3 className="brand-font text-2xl font-bold">
+              Admin Sign In Required
+            </h3>
+
             <p className="mt-2 text-sm text-gray-600">
-              You must sign in as an administrator to {pendingAction} quizzes.
+              You must sign in as an administrator to{" "}
+              {pendingAction} quizzes.
             </p>
+
             <div className="mt-6 flex flex-col gap-2.5">
+
               <button
                 type="button"
                 onClick={handleConfirmLogin}
@@ -223,17 +296,20 @@ function App() {
               >
                 SIGN IN
               </button>
+
               <button
                 type="button"
                 onClick={() => setShowLoginPrompt(false)}
-                className="w-full rounded-xl border border-gray-300 py-2.5 font-semibold text-gray-600 hover:bg-gray-50"
+                className="w-full rounded-xl border border-gray-300 py-2.5 font-semibold text-gray-600 transition hover:bg-gray-50"
               >
                 Cancel
               </button>
+
             </div>
           </div>
         </div>
       )}
+
     </div>
   );
 }
