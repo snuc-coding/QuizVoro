@@ -1,3 +1,4 @@
+
 // Centralized API client for QuizVoro
 
 export const API_BASE_URL =
@@ -46,23 +47,29 @@ export function isAdminAuthenticated() {
 }
 
 // ── Participant token helpers ────────────────────────────────────────────────
+// Each browser tab gets its own participant session.
+// This allows multiple players to use the same Chrome browser.
 
 export function getParticipantToken() {
-  return localStorage.getItem(PARTICIPANT_TOKEN_KEY) || null;
+  return sessionStorage.getItem(PARTICIPANT_TOKEN_KEY) || null;
 }
 
 export function setParticipantSession(sessionData) {
   if (sessionData?.token) {
-    localStorage.setItem(PARTICIPANT_TOKEN_KEY, sessionData.token);
+    sessionStorage.setItem(PARTICIPANT_TOKEN_KEY, sessionData.token);
   }
+
   if (sessionData) {
-    localStorage.setItem(PARTICIPANT_INFO_KEY, JSON.stringify(sessionData));
+    sessionStorage.setItem(
+      PARTICIPANT_INFO_KEY,
+      JSON.stringify(sessionData)
+    );
   }
 }
 
 export function getParticipantSession() {
   try {
-    const raw = localStorage.getItem(PARTICIPANT_INFO_KEY);
+    const raw = sessionStorage.getItem(PARTICIPANT_INFO_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -70,6 +77,10 @@ export function getParticipantSession() {
 }
 
 export function clearParticipantSession() {
+  sessionStorage.removeItem(PARTICIPANT_TOKEN_KEY);
+  sessionStorage.removeItem(PARTICIPANT_INFO_KEY);
+
+  // Remove old shared participant credentials.
   localStorage.removeItem(PARTICIPANT_TOKEN_KEY);
   localStorage.removeItem(PARTICIPANT_INFO_KEY);
 }
@@ -133,6 +144,7 @@ export async function apiRequest(path, options = {}) {
       (typeof data === "object" && data?.detail) ||
       (typeof data === "string" && data) ||
       `Request failed with status ${response.status}`;
+
     const error = new Error(errorMessage);
     error.status = response.status;
     error.data = data;
@@ -151,6 +163,7 @@ export const authApi = {
       skipAuth: true,
       body: JSON.stringify({ username, password }),
     });
+
     setAdminToken(data.access_token, username, true);
     return data;
   },
@@ -259,6 +272,7 @@ export const quizApi = {
   async uploadMedia(questionId, file) {
     const formData = new FormData();
     formData.append("file", file);
+
     return apiRequest(`/api/v1/questions/${questionId}/media`, {
       method: "POST",
       body: formData,
@@ -339,6 +353,7 @@ export const participantApi = {
       skipAuth: true,
       body: JSON.stringify({ pin, nickname }),
     });
+
     setParticipantSession(data);
     return data;
   },
@@ -349,6 +364,7 @@ export const participantApi = {
       skipAuth: true,
       body: JSON.stringify({ pin, token }),
     });
+
     setParticipantSession(data);
     return data;
   },
@@ -375,9 +391,11 @@ export const participantApi = {
 
   async getLeaderboard(gameId, limit = 10, roundId = null) {
     let url = `/api/v1/games/${gameId}/leaderboard?limit=${limit}`;
+
     if (roundId) {
       url += `&round_id=${roundId}`;
     }
+
     return apiRequest(url);
   },
 };

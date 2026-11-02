@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef } from "react";
+
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
 import { QuizWebSocket } from "../services/websocket";
@@ -20,21 +21,157 @@ function ProjectorPage() {
   const [revealedData, setRevealedData] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const [error, setError] = useState("");
+  const [connected, setConnected] = useState(false);
 
   const timerRef = useRef(null);
+  const wsRef = useRef(null);
 
-  // Build a media URL that supports relative and absolute URLs.
-  const getMediaUrl = (url) => {
-    if (!url) return "";
+  const stopTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
 
-    if (/^https?:\/\//i.test(url)) {
-      return url;
+  const startTimer = useCallback((seconds) => {
+    stopTimer();
+
+    const initialSeconds = Math.max(0, Math.ceil(Number(seconds) || 0));
+    setTimeLeft(initialSeconds);
+
+    if (initialSeconds <= 0) return;
+
+    timerRef.current = setInterval(() => {
+      setTimeLeft((previous) => {
+        if (previous <= 1) {
+          stopTimer();
+          return 0;
+        }
+
+        return previous - 1;
+      });
+    }, 1000);
+  }, [stopTimer]);
+
+  // Restore the countdown using the backend's deadline.
+  const restoreTimer = useCallback((deadline, serverTime) => {
+    if (!deadline) return;
+
+    const deadlineMs = new Date(deadline).getTime();
+    const serverMs = serverTime
+      ? new Date(serverTime).getTime()
+      : Date.now();
+
+    if (Number.isNaN(deadlineMs) || Number.isNaN(serverMs)) {
+      return;
     }
 
-    return `${API_BASE_URL.replace(/\/$/, "")}${
-      url.startsWith("/") ? "" : "/"
-    }${url}`;
-  };
+    const remainingSeconds = Math.max(
+      0,
+      Math.ceil((deadlineMs - serverMs) / 1000)
+    );
+
+    startTimer(remainingSeconds);
+  }, [startTimer]);
+
+  const addPlayer = useCallback((player) => {
+    if (!player?.participant_id) return;
+
+    setPlayers((previous) => {
+      const alreadyExists = previous.some(
+        (item) =>
+          item.participant_id === player.participant_id
+      );
+
+      if (alreadyExists) return previous;
+
+      return [...previous, {
+        participant_id: player.participant_id,
+        nickname: player.nickname || "Participant",
+      }];
+    });
+  }, []);
+
+  const removePlayer = useCallback((participantId) => {
+    setPlayers((previous) =>
+      previous.filter(
+        (player) => player.participant_id !== participantId
+      )
+    );
+  }, []);
+
+  // Restore the projector from the backend snapshot after refresh/reconnect.
+  const restoreStageState = useCallback((data) => {
+    if (!data) return;
+
+    const gameStatus = String(
+      data.game_status || data.status || "lobby"
+    ).toLowerCase();
+
+    const normalizedStatus = {
+      waiting: "lobby",
+      ready: "lobby",
+      running: "active",
+      in_progress: "active",
+      active: "active",
+      paused: "paused",
+      reveal: "reveal",
+      results: "reveal",
+      finished: "finished",
+      completed: "finished",
+    }[gameStatus] || "lobby";
+
+    setStatus(normalizedStatus);
+
+    setPlayers(
+      Array.isArray(data.players) ? data.players : []
+    );
+
+    setCurrentQuestion(data.current_question || null);
+
+    setQuestionNumber(
+      Number(data.question_number) || 1
+    );
+
+    setTotalQuestions(
+      Number(data.total_questions) || 1
+    );
+
+    setAnsweredCount(
+      Number(data.answered_count) || 0
+    );
+
+    setRevealedData(
+      normalizedStatus === "reveal" || normalizedStatus === "finished"
+        ? data.revealed_data || null
+        : null
+    );
+
+    // Do not display a leaderboard before the game is finished.
+    if (normalizedStatus === "finished") {
+      setLeaderboard(
+        data.leaderboard?.top ||
+        data.leaderboard ||
+        []
+      );
+    } else {
+      setLeaderboard([]);
+    }
+
+    stopTimer();
+
+    if (normalizedStatus === "active") {
+      if (data.deadline) {
+        restoreTimer(data.deadline, data.server_time);
+      } else if (data.remaining_seconds != null) {
+        startTimer(data.remaining_seconds);
+      }
+    } else if (normalizedStatus === "paused") {
+      if (data.remaining_seconds != null) {
+        setTimeLeft(Math.ceil(Number(data.remaining_seconds)));
+      }
+    }
+  }, [restoreTimer, startTimer, stopTimer]);
 
   // Connect to the stage WebSocket.
   useEffect(() => {
@@ -52,115 +189,133 @@ function ProjectorPage() {
 
       onOpen: () => {
         console.log("Stage WebSocket connected.");
+        setConnected(true);
+        setError("");
       },
 
       onError: (err) => {
         console.warn("Stage WebSocket error:", err);
+        setConnected(false);
       },
 
       onClose: () => {
         console.warn("Stage WebSocket disconnected.");
+        setConnected(false);
       },
 
       onMessage: (event, data) => {
-        if (event === "PLAYER_JOINED") {
-          setPlayers((prev) => {
-            if (
-              prev.some(
-                (p) => p.participant_id === data.participant_id
-              )
-            ) {
-              return prev;
-            }
+        console.log("Stage event:", event, data);
 
-            return [
-              ...prev,
-              {
-                participant_id: data.participant_id,
-                nickname: data.nickname,
-              },
-            ];
-          });
-        } else if (
+        if (event === "STAGE_STATE") {
+          restoreStageState(data);
+        }
+
+        else if (event === "PLAYER_JOINED") {
+          addPlayer(data);
+        }
+
+        else if (
           event === "PLAYER_LEFT" ||
           event === "PLAYER_KICKED"
         ) {
-          setPlayers((prev) =>
-            prev.filter(
-              (p) => p.participant_id !== data.participant_id
-            )
-          );
-        } else if (event === "QUESTION_STARTED") {
-          setStatus("active");
+          removePlayer(data.participant_id);
+        }
 
+        else if (event === "QUESTION_STARTED") {
+          setStatus("active");
           setCurrentQuestion(data.question);
           setQuestionNumber(data.question_number);
           setTotalQuestions(data.total_questions);
-
-          setTimeLeft(data.time_limit || 15);
           setAnsweredCount(0);
           setRevealedData(null);
+          setLeaderboard([]);
 
-          clearInterval(timerRef.current);
+          if (data.deadline) {
+            restoreTimer(data.deadline, data.server_time);
+          } else {
+            startTimer(data.time_limit || 15);
+          }
+        }
 
-          timerRef.current = setInterval(() => {
-            setTimeLeft((prev) => {
-              if (prev <= 1) {
-                clearInterval(timerRef.current);
-                return 0;
-              }
+        else if (event === "ANSWER_COUNT_UPDATED") {
+          setAnsweredCount(
+            Number(data.answered_count) || 0
+          );
+        }
 
-              return prev - 1;
-            });
-          }, 1000);
-        } else if (event === "ANSWER_COUNT_UPDATED") {
-          setAnsweredCount(data.answered_count || 0);
-        } else if (event === "GAME_PAUSED") {
+        else if (event === "GAME_PAUSED") {
           setStatus("paused");
-          clearInterval(timerRef.current);
-        } else if (event === "GAME_RESUMED") {
-          setStatus("active");
+          stopTimer();
 
           if (data.remaining_seconds != null) {
-            setTimeLeft(Math.round(data.remaining_seconds));
+            setTimeLeft(
+              Math.ceil(Number(data.remaining_seconds))
+            );
           }
+        }
 
-          clearInterval(timerRef.current);
+        else if (event === "GAME_RESUMED") {
+          setStatus("active");
 
-          timerRef.current = setInterval(() => {
-            setTimeLeft((prev) => {
-              if (prev <= 1) {
-                clearInterval(timerRef.current);
-                return 0;
-              }
+          if (data.deadline) {
+            restoreTimer(data.deadline, data.server_time);
+          } else if (data.remaining_seconds != null) {
+            startTimer(data.remaining_seconds);
+          }
+        }
 
-              return prev - 1;
-            });
-          }, 1000);
-        } else if (event === "ANSWER_REVEALED") {
+        else if (event === "ANSWER_REVEALED") {
           setStatus("reveal");
-          clearInterval(timerRef.current);
+          stopTimer();
           setRevealedData(data);
-        } else if (event === "LEADERBOARD_UPDATED") {
-          setLeaderboard(data.top || []);
-        } else if (event === "GAME_FINISHED") {
+        }
+
+        else if (event === "LEADERBOARD_UPDATED") {
+          // Do not show intermediate leaderboard updates.
+          // The leaderboard is displayed only after GAME_FINISHED.
+        }
+
+        else if (event === "GAME_FINISHED") {
           setStatus("finished");
-          clearInterval(timerRef.current);
-          setLeaderboard(data.leaderboard?.top || []);
-        } else if (event === "ERROR") {
+          stopTimer();
+
+          setLeaderboard(
+            data.leaderboard?.top ||
+            data.leaderboard ||
+            []
+          );
+        }
+
+        else if (event === "ERROR") {
           console.error("Stage WebSocket error:", data);
         }
       },
     });
 
+    wsRef.current = ws;
     ws.connect();
 
     return () => {
-      clearInterval(timerRef.current);
-      ws.close();
-    };
-  }, [gameId, token]);
+      stopTimer();
+      setConnected(false);
 
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [
+    gameId,
+    token,
+    addPlayer,
+    removePlayer,
+    restoreStageState,
+    startTimer,
+    stopTimer,
+    restoreTimer,
+  ]);
+
+  // Automatically use the domain currently hosting this page.
   const joinUrl = `${window.location.origin}/`;
 
   const isActive = status === "active";
@@ -190,6 +345,7 @@ function ProjectorPage() {
 
   return (
     <main className="quiz-background flex min-h-screen flex-col px-5 py-6 text-white sm:px-10 sm:py-8 lg:px-14">
+
       {/* HEADER */}
       <header className="flex flex-wrap items-center justify-between gap-4 border-b border-white/15 pb-5">
         <div>
@@ -202,10 +358,16 @@ function ProjectorPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <span className="flex items-center gap-2 rounded-full border border-green-400/30 bg-green-400/10 px-4 py-2 text-xs font-bold tracking-wider text-green-300">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-green-400" />
-            LIVE STAGE
+        <div className="flex flex-wrap items-center gap-3">
+          <span className={`flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-bold tracking-wider ${
+            connected
+              ? "border-green-400/30 bg-green-400/10 text-green-300"
+              : "border-red-400/30 bg-red-400/10 text-red-300"
+          }`}>
+            <span className={`h-2 w-2 rounded-full ${
+              connected ? "animate-pulse bg-green-400" : "bg-red-400"
+            }`} />
+            {connected ? "CONNECTED" : "DISCONNECTED"}
           </span>
 
           <span className="rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-bold tracking-wider text-purple-100">
@@ -224,6 +386,7 @@ function ProjectorPage() {
 
       {/* MAIN CONTENT */}
       <div className="my-8 flex flex-1 flex-col justify-center">
+
         {/* LOBBY */}
         {status === "lobby" && (
           <section className="mx-auto w-full max-w-5xl text-center">
@@ -245,6 +408,7 @@ function ProjectorPage() {
             </div>
 
             <div className="grid items-center gap-8 rounded-3xl border border-white/15 bg-[#260638]/80 p-6 shadow-2xl backdrop-blur-xl sm:p-10 md:grid-cols-2">
+
               {/* QR CODE */}
               <div className="flex flex-col items-center">
                 <div className="rounded-3xl bg-white p-5 shadow-2xl">
@@ -259,10 +423,6 @@ function ProjectorPage() {
                 <p className="mt-5 text-sm font-bold tracking-widest text-[#91F0DF]">
                   SCAN TO JOIN
                 </p>
-
-                <p className="mt-2 text-sm text-purple-100/60">
-                  {window.location.host}
-                </p>
               </div>
 
               {/* PLAYER COUNT */}
@@ -276,10 +436,7 @@ function ProjectorPage() {
                 </h3>
 
                 <p className="mt-2 text-lg text-purple-100/70">
-                  {players.length === 1
-                    ? "Participant"
-                    : "Participants"}{" "}
-                  ready
+                  {players.length === 1 ? "Participant" : "Participants"} ready
                 </p>
 
                 <div className="mt-7 w-full rounded-2xl border border-white/10 bg-white/5 p-5">
@@ -316,6 +473,7 @@ function ProjectorPage() {
         {/* QUESTION / PAUSED / REVEAL */}
         {(isActive || isPaused || isReveal) && currentQuestion && (
           <section className="mx-auto w-full max-w-6xl">
+
             {/* TOP INFORMATION */}
             <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
               <div className="rounded-2xl border border-white/15 bg-white/10 px-5 py-3">
@@ -333,13 +491,11 @@ function ProjectorPage() {
 
               {/* TIMER */}
               {!isReveal && (
-                <div
-                  className={`flex h-24 w-24 flex-col items-center justify-center rounded-full border-[5px] shadow-xl ${
-                    timeLeft <= 5
-                      ? "animate-pulse border-red-400 bg-red-400/10 text-red-300"
-                      : "border-[#91F0DF] bg-[#91F0DF]/10 text-[#91F0DF]"
-                  }`}
-                >
+                <div className={`flex h-24 w-24 flex-col items-center justify-center rounded-full border-[5px] shadow-xl ${
+                  timeLeft <= 5
+                    ? "animate-pulse border-red-400 bg-red-400/10 text-red-300"
+                    : "border-[#91F0DF] bg-[#91F0DF]/10 text-[#91F0DF]"
+                }`}>
                   <span className="text-4xl font-black tabular-nums">
                     {timeLeft}
                   </span>
@@ -380,7 +536,6 @@ function ProjectorPage() {
                 {currentQuestion.question_text}
               </h2>
 
-              {/* IMAGE / AUDIO / VIDEO */}
               {currentQuestion.media_url && (
                 <div className="mt-7 flex w-full justify-center">
                   {(() => {
@@ -388,9 +543,11 @@ function ProjectorPage() {
                       currentQuestion.media_type || "image"
                     ).toLowerCase();
 
-                    const mediaUrl = getMediaUrl(
+                    const mediaUrl = /^https?:\/\//i.test(
                       currentQuestion.media_url
-                    );
+                    )
+                      ? currentQuestion.media_url
+                      : `${API_BASE_URL.replace(/\/$/, "")}${currentQuestion.media_url.startsWith("/") ? "" : "/"}${currentQuestion.media_url}`;
 
                     if (mediaType === "image") {
                       return (
@@ -454,10 +611,11 @@ function ProjectorPage() {
                 const isCorrect =
                   revealedData?.correct_option_id === opt.id;
 
-                const voteCount =
+                const voteCount = Number(
                   revealedData?.distribution?.find(
-                    (d) => d.option_id === opt.id
-                  )?.count || 0;
+                    (item) => item.option_id === opt.id
+                  )?.count || 0
+                );
 
                 return (
                   <div
@@ -489,7 +647,7 @@ function ProjectorPage() {
                         </p>
 
                         <p className="text-xs font-bold uppercase">
-                          Votes
+                          {voteCount === 1 ? "VOTE" : "VOTES"}
                         </p>
                       </div>
                     )}
@@ -566,7 +724,7 @@ function ProjectorPage() {
                 <div className="space-y-4">
                   {leaderboard.slice(0, 5).map((entry, idx) => (
                     <div
-                      key={entry.participant_id}
+                      key={entry.participant_id || idx}
                       className={`flex items-center justify-between gap-4 rounded-2xl p-5 shadow-xl transition ${
                         idx === 0
                           ? "scale-[1.02] bg-amber-400 text-[#31064D]"
@@ -585,7 +743,7 @@ function ProjectorPage() {
                               ? "🥈"
                               : idx === 2
                                 ? "🥉"
-                                : `#${entry.rank}`}
+                                : `#${entry.rank || idx + 1}`}
                         </span>
 
                         <div className="min-w-0 text-left">
@@ -594,7 +752,7 @@ function ProjectorPage() {
                           </p>
 
                           <p className="text-xs font-semibold opacity-70">
-                            RANK #{entry.rank}
+                            RANK #{entry.rank || idx + 1}
                           </p>
                         </div>
                       </div>

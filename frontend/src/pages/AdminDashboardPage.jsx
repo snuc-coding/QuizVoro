@@ -33,7 +33,7 @@ function AdminDashboardPage() {
   ];
 
   return (
-    <main className="min-h-screen px-5 py-6 sm:px-8 lg:px-12">
+    <main className="quiz-background min-h-screen px-5 py-6 sm:px-8 lg:px-12">
       <div className="mx-auto w-full max-w-6xl">
 
         {/* HEADER */}

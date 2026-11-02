@@ -1,3 +1,4 @@
+
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
 import { participantApi, API_BASE_URL } from "../services/api";
@@ -26,6 +27,17 @@ const optionColors = [
   },
 ];
 
+function readParticipantScreenState(storageKey) {
+  try {
+    if (typeof window === "undefined") return null;
+    const saved = window.sessionStorage.getItem(storageKey);
+    return saved ? JSON.parse(saved) : null;
+  } catch (error) {
+    console.warn("Could not read saved participant state:", error);
+    return null;
+  }
+}
+
 function QuestionScreen() {
   const { gameId } = useParams();
   const location = useLocation();
@@ -37,19 +49,94 @@ function QuestionScreen() {
   const token = participantData.token;
   const nickname = participantData.nickname || "Player";
 
-  const [gameState, setGameState] = useState("lobby");
-  const [currentQuestion, setCurrentQuestion] = useState(null);
-  const [questionNumber, setQuestionNumber] = useState(1);
-  const [totalQuestions, setTotalQuestions] = useState(1);
-  const [timeLeft, setTimeLeft] = useState(15);
-  const [selectedOptionId, setSelectedOptionId] = useState(null);
+  // Keep this state per game and participant, and per browser tab.
+  const storageKey = `quizvoro:participant-screen:${gameId}:${nickname}`;
+  const [savedState] = useState(() =>
+    readParticipantScreenState(storageKey)
+  );
+
+  const [gameState, setGameState] = useState(
+    savedState?.gameState || "lobby"
+  );
+  const [currentQuestion, setCurrentQuestion] = useState(
+    savedState?.currentQuestion || null
+  );
+  const [questionNumber, setQuestionNumber] = useState(
+    savedState?.questionNumber || 1
+  );
+  const [totalQuestions, setTotalQuestions] = useState(
+    savedState?.totalQuestions || 1
+  );
+  const [timeLeft, setTimeLeft] = useState(
+    savedState?.timeLeft ?? 15
+  );
+  const [selectedOptionId, setSelectedOptionId] = useState(
+    savedState?.selectedOptionId ?? null
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [answerLocked, setAnswerLocked] = useState(false);
-  const [myResult, setMyResult] = useState(null);
+  const [answerLocked, setAnswerLocked] = useState(
+    savedState?.answerLocked ?? false
+  );
+  const [myResult, setMyResult] = useState(
+    savedState?.myResult || null
+  );
   const [error, setError] = useState("");
 
   const wsRef = useRef(null);
   const timerRef = useRef(null);
+
+  // Persist the participant's screen so a refresh does not send them to lobby.
+  useEffect(() => {
+    if (!token) return;
+
+    const snapshot = {
+      gameState,
+      currentQuestion,
+      questionNumber,
+      totalQuestions,
+      timeLeft,
+      selectedOptionId,
+      answerLocked,
+      myResult,
+    };
+
+    try {
+      window.sessionStorage.setItem(storageKey, JSON.stringify(snapshot));
+    } catch (storageError) {
+      console.warn("Could not save participant screen state:", storageError);
+    }
+  }, [
+    token,
+    storageKey,
+    gameState,
+    currentQuestion,
+    questionNumber,
+    totalQuestions,
+    timeLeft,
+    selectedOptionId,
+    answerLocked,
+    myResult,
+  ]);
+
+  // Start an accurate countdown using a local target time.
+  const startCountdown = useCallback((seconds) => {
+    clearInterval(timerRef.current);
+
+    const duration = Math.max(0, Number(seconds) || 0);
+    const targetTime = Date.now() + duration * 1000;
+
+    setTimeLeft(Math.ceil(duration));
+
+    timerRef.current = setInterval(() => {
+      const remaining = Math.max(0, (targetTime - Date.now()) / 1000);
+
+      setTimeLeft(Math.ceil(remaining));
+
+      if (remaining <= 0) {
+        clearInterval(timerRef.current);
+      }
+    }, 200);
+  }, []);
 
   // Build a media URL that works for both relative and absolute URLs.
   const getMediaUrl = (url) => {
@@ -64,7 +151,7 @@ function QuestionScreen() {
     }${url}`;
   };
 
-  // Connect Participant WebSocket
+  // Connect Participant WebSocket and restore an existing live question.
   useEffect(() => {
     if (!gameId || !token) {
       setError(
@@ -72,6 +159,145 @@ function QuestionScreen() {
       );
       return;
     }
+
+    let cancelled = false;
+
+    // Restore from the backend first. If the game is in reveal/paused/finished
+    // state, the current-question endpoint may return 409, so retain the saved
+    // screen and retrieve the participant's latest score separately.
+    const restoreParticipantState = async () => {
+      const savedQuestionId = savedState?.currentQuestion?.id;
+
+      try {
+        const data = await participantApi.getCurrentQuestion(gameId);
+
+        if (cancelled || !data) return;
+
+        const restoredQuestion = data.question;
+        if (!restoredQuestion) return;
+
+        const sameQuestion =
+          savedQuestionId != null &&
+          String(savedQuestionId) === String(restoredQuestion.id);
+
+        // Do not turn a previously displayed reveal back into "answered"
+        // when the backend still returns the same question.
+        if (
+          sameQuestion &&
+          (savedState?.gameState === "reveal" ||
+            savedState?.gameState === "finished")
+        ) {
+          try {
+            const stats = await participantApi.getMyStats(gameId);
+            if (!cancelled && stats) setMyResult(stats);
+          } catch (statsError) {
+            console.warn("Could not refresh participant stats:", statsError);
+          }
+          return;
+        }
+
+        const deadlineMs = new Date(data.deadline).getTime();
+        const serverTimeMs = new Date(data.server_time).getTime();
+        const remainingSeconds =
+          Number.isFinite(deadlineMs) && Number.isFinite(serverTimeMs)
+            ? Math.max(0, (deadlineMs - serverTimeMs) / 1000)
+            : 0;
+
+        setCurrentQuestion(restoredQuestion);
+        setQuestionNumber(data.question_number || 1);
+        setTotalQuestions(data.total_questions || 1);
+        setSelectedOptionId(null);
+        setIsSubmitting(false);
+        setMyResult(null);
+
+        if (data.already_answered) {
+          clearInterval(timerRef.current);
+
+          // If this exact question has already been scored, restore its result.
+          try {
+            const stats = await participantApi.getMyStats(gameId);
+            const resultQuestionId = stats?.last_result?.question_id;
+
+            if (
+              !cancelled &&
+              resultQuestionId != null &&
+              String(resultQuestionId) === String(restoredQuestion.id)
+            ) {
+              setMyResult(stats);
+              setAnswerLocked(true);
+              setGameState("reveal");
+              return;
+            }
+          } catch (statsError) {
+            console.warn("Could not check the participant's latest result:", statsError);
+          }
+
+          setAnswerLocked(true);
+          setGameState("answered");
+          setTimeLeft(Math.ceil(remainingSeconds));
+        } else {
+          setAnswerLocked(false);
+          setGameState("question");
+          startCountdown(remainingSeconds);
+        }
+      } catch (questionError) {
+        if (cancelled) return;
+
+        console.info(
+          "No active question endpoint response; checking saved state and participant stats.",
+          questionError?.message || ""
+        );
+
+        // If the page was refreshed during reveal or after the game ended,
+        // restore the backend's latest personal result.
+        try {
+          const stats = await participantApi.getMyStats(gameId);
+          if (cancelled) return;
+
+          if (stats) {
+            setMyResult(stats);
+
+            const resultQuestionId = stats.last_result?.question_id;
+            const savedQuestionId = savedState?.currentQuestion?.id;
+            const resultMatchesSavedQuestion =
+              resultQuestionId != null &&
+              savedQuestionId != null &&
+              String(resultQuestionId) === String(savedQuestionId);
+
+            if (savedState?.gameState === "finished") {
+              setGameState("finished");
+              clearInterval(timerRef.current);
+            } else if (
+              savedState?.gameState === "reveal" ||
+              resultMatchesSavedQuestion ||
+              (!savedState?.gameState && stats.last_result)
+            ) {
+              setGameState("reveal");
+              setAnswerLocked(true);
+              clearInterval(timerRef.current);
+            } else if (
+              savedState?.gameState === "answered" ||
+              savedState?.gameState === "paused"
+            ) {
+              setGameState(savedState.gameState);
+              setAnswerLocked(true);
+              clearInterval(timerRef.current);
+            }
+          }
+        } catch (statsError) {
+          console.warn(
+            "Could not restore participant stats:",
+            statsError?.message || ""
+          );
+
+          // Keep the saved view (question, locked, reveal, etc.) rather than
+          // resetting the participant to the lobby.
+          if (savedState?.gameState && !cancelled) {
+            setGameState(savedState.gameState);
+          }
+        }
+      }
+    };
 
     const ws = new QuizWebSocket({
       role: "participant",
@@ -92,66 +318,52 @@ function QuestionScreen() {
           setCurrentQuestion(data.question);
           setQuestionNumber(data.question_number);
           setTotalQuestions(data.total_questions);
-          setTimeLeft(data.time_limit || 15);
+
           setSelectedOptionId(null);
           setAnswerLocked(false);
+          setIsSubmitting(false);
           setMyResult(null);
 
-          clearInterval(timerRef.current);
-
-          timerRef.current = setInterval(() => {
-            setTimeLeft((prev) => {
-              if (prev <= 1) {
-                clearInterval(timerRef.current);
-                return 0;
-              }
-
-              return prev - 1;
-            });
-          }, 1000);
+          startCountdown(data.time_limit || 15);
         } else if (event === "ANSWER_ACK") {
           setAnswerLocked(true);
+          setIsSubmitting(false);
           setGameState("answered");
+          clearInterval(timerRef.current);
         } else if (event === "GAME_PAUSED") {
           clearInterval(timerRef.current);
+
           setGameState((prev) =>
             prev === "question" ? "paused" : prev
           );
         } else if (event === "GAME_RESUMED") {
           if (data.remaining_seconds != null) {
-            setTimeLeft(Math.round(data.remaining_seconds));
+            startCountdown(data.remaining_seconds);
           }
 
           setGameState((prev) =>
             prev === "paused" ? "question" : prev
           );
-
-          clearInterval(timerRef.current);
-
-          timerRef.current = setInterval(() => {
-            setTimeLeft((prev) => {
-              if (prev <= 1) {
-                clearInterval(timerRef.current);
-                return 0;
-              }
-
-              return prev - 1;
-            });
-          }, 1000);
         } else if (event === "ANSWER_REVEALED") {
           setGameState("reveal");
+          setAnswerLocked(true);
           clearInterval(timerRef.current);
 
-          participantApi
-            .getMyStats(gameId)
-            .then((stats) => {
-              setMyResult(stats);
-            })
-            .catch((e) =>
-              console.warn("Failed to get my stats:", e)
-            );
+          // The backend sends this participant's personalized result as my_stats.
+          if (data?.my_stats) {
+            setMyResult(data.my_stats);
+          } else {
+            participantApi
+              .getMyStats(gameId)
+              .then((stats) => {
+                setMyResult(stats);
+              })
+              .catch((e) =>
+                console.warn("Failed to get my stats:", e)
+              );
+          }
         } else if (event === "PLAYER_PERSONAL_RESULT") {
-          setMyResult(data);
+          setMyResult(data?.my_stats || data);
         } else if (event === "PLAYER_KICKED") {
           setGameState("kicked");
           clearInterval(timerRef.current);
@@ -170,11 +382,15 @@ function QuestionScreen() {
     ws.connect();
     wsRef.current = ws;
 
+    // Fetch the current question when the player opens or refreshes the page.
+    restoreParticipantState();
+
     return () => {
+      cancelled = true;
       clearInterval(timerRef.current);
       ws.close();
     };
-  }, [gameId, token]);
+  }, [gameId, token, startCountdown, savedState]);
 
   // Answer Submission (via WS if open, fallback to REST)
   const handleSelectOption = useCallback(
@@ -214,6 +430,7 @@ function QuestionScreen() {
         }
       } catch (err) {
         console.error("Answer submission failed:", err);
+        setSelectedOptionId(null);
         alert(err.message || "Failed to lock in your answer.");
       } finally {
         setIsSubmitting(false);
@@ -460,7 +677,7 @@ function QuestionScreen() {
                     <p className="mt-2 text-xl font-bold">Correct!</p>
 
                     <p className="text-sm">
-                      +{myResult.last_result.points_awarded || 0} points
+                      +{myResult.last_result.points || 0} points
                     </p>
                   </div>
                 ) : (

@@ -190,7 +190,7 @@ function CreateQuizPage() {
     "w-full rounded-xl border border-[#DED9E5] bg-[#F4F2F7] px-4 py-3 text-[#321044] outline-none transition placeholder:text-gray-400 focus:border-[#7950A8] focus:ring-2 focus:ring-purple-100";
 
   return (
-    <main className="min-h-screen bg-transparent px-5 py-8 sm:px-8 lg:px-12">
+    <main className="quiz-background min-h-screen px-5 py-8 sm:px-8 lg:px-12">
       <div className="mx-auto w-full max-w-5xl">
 
         {/* HEADER */}

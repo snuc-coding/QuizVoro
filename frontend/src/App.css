@@ -182,3 +182,11 @@
     border-right-color: var(--border);
   }
 }
+.quiz-background {
+  background: radial-gradient(
+    circle at top center,
+    #3d1554 0%,
+    #2b0d3b 55%,
+    #21082f 100%
+  );
+}
