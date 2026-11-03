@@ -61,7 +61,8 @@ def _auth_participant(db, token: str, game_id: int):
     membership = participant_service.get_participant_by_token(db, token)
     if membership.game_id != game_id or not membership.is_active:
         raise PermissionError("Removed or not in this game")
-    return membership.id, membership.participant.nickname
+    display_name = membership.display_name or membership.participant.nickname
+    return membership.id, display_name, membership.is_anonymous
 
 
 def _check_stage_game(db, game_id: int) -> None:
@@ -192,7 +193,7 @@ async def participant_websocket_endpoint(
     Requires valid participant token. Enforces answer secrecy and data isolation.
     """
     try:
-        participant_id, nickname = await _db_call(_auth_participant, token, gameId)
+        participant_id, nickname, is_anonymous = await _db_call(_auth_participant, token, gameId)
     except Exception:
         await websocket.close(code=4003, reason="Invalid participant token")
         return
@@ -203,7 +204,7 @@ async def participant_websocket_endpoint(
     try:
         total_active = await _db_call(_count_active, gameId)
         await orchestrator.broadcast_player_joined(
-            gameId, participant_id, nickname, total_active
+            gameId, participant_id, nickname, total_active, is_anonymous=is_anonymous
         )
     except Exception as exc:
         logger.error(f"Participant join broadcast error: {exc}")
@@ -244,7 +245,7 @@ async def participant_websocket_endpoint(
         try:
             total_left = await _db_call(_count_active, gameId)
             await orchestrator.broadcast_player_left(
-                gameId, participant_id, total_left, nickname
+                gameId, participant_id, total_left, nickname, is_anonymous=is_anonymous
             )
         except Exception as exc:
             logger.error(f"Participant leave broadcast error: {exc}")

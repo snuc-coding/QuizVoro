@@ -385,6 +385,41 @@ class TestJoin:
         assert data["game_status"] == "lobby"
         assert len(data["token"]) >= 20
 
+    def test_anonymous_join_generates_display_name_and_shields_identity(self, client, game):
+        r1 = client.post(f"{API}/games/join", json={"pin": game["pin"], "nickname": "SecretPlayer1", "is_anonymous": True})
+        assert r1.status_code == 201
+        d1 = r1.json()
+        assert d1["is_anonymous"] is True
+        assert d1["display_name"] == "Anonymous_01"
+        assert d1["nickname"] == "Anonymous_01"
+
+        r2 = client.post(f"{API}/games/join", json={"pin": game["pin"], "nickname": "SecretPlayer2", "is_anonymous": True})
+        assert r2.status_code == 201
+        d2 = r2.json()
+        assert d2["is_anonymous"] is True
+        assert d2["display_name"] == "Anonymous_02"
+        assert d2["nickname"] == "Anonymous_02"
+
+        # Non-anonymous player gets original name
+        r3 = client.post(f"{API}/games/join", json={"pin": game["pin"], "nickname": "PublicPlayer", "is_anonymous": False})
+        assert r3.status_code == 201
+        d3 = r3.json()
+        assert d3["is_anonymous"] is False
+        assert d3["display_name"] == "PublicPlayer"
+        assert d3["nickname"] == "PublicPlayer"
+
+        # Leaderboard should show anonymous names and top 5 limit
+        board = _board(client, game["id"])
+        top_names = [entry["nickname"] for entry in board["top"]]
+        assert "SecretPlayer1" not in top_names
+        assert "SecretPlayer2" not in top_names
+        assert "Anonymous_01" in top_names
+        assert "Anonymous_02" in top_names
+        assert "PublicPlayer" in top_names
+        # Top 3 are certificate eligible
+        for entry in board["top"]:
+            assert entry["is_certificate_eligible"] == (entry["rank"] <= 3)
+
     def test_nickname_is_cleaned(self, client, game):
         r = client.post(f"{API}/games/join", json={"pin": game["pin"], "nickname": "  Rathi   K  "})
         assert r.json()["nickname"] == "Rathi K"

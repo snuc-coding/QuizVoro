@@ -13,7 +13,6 @@ function JoinPage() {
       .slice(0, 8)
   );
 
-  const [nickname, setNickname] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -22,25 +21,20 @@ function JoinPage() {
     setError("");
 
     const cleanPin = pin.replace(/\D/g, "").slice(0, 8);
-    const cleanNick = nickname.trim();
 
     if (cleanPin.length < 4 || cleanPin.length > 8) {
       setError("Please enter a valid Game PIN.");
       return;
     }
 
-    if (!cleanNick) {
-      setError("Please choose a nickname.");
-      return;
-    }
-
     setLoading(true);
 
     try {
-      // Existing backend integration
+      // Automatic anonymous join: everyone receives a unique Anonymous_XX
       const joinData = await participantApi.joinGame(
         cleanPin,
-        cleanNick
+        null,
+        true
       );
 
       // Existing game navigation and participant data
@@ -48,7 +42,8 @@ function JoinPage() {
         state: {
           gameId: joinData.game_id,
           participantId: joinData.participant_id,
-          nickname: joinData.nickname,
+          nickname: joinData.display_name || joinData.nickname,
+          isAnonymous: true,
           token: joinData.token,
           pin: cleanPin,
         },
@@ -58,7 +53,7 @@ function JoinPage() {
 
       setError(
         err.message ||
-          "Could not join game. Please verify the PIN and nickname."
+          "Could not join game. Please verify the PIN."
       );
     } finally {
       setLoading(false);
@@ -127,30 +122,8 @@ function JoinPage() {
             />
           </div>
 
-          {/* NICKNAME */}
-          <div>
-            <label
-              htmlFor="player-nickname"
-              className="mb-1 block text-xs font-bold uppercase text-gray-500"
-            >
-              Nickname
-            </label>
-
-            <input
-              id="player-nickname"
-              type="text"
-              autoComplete="nickname"
-              maxLength={24}
-              value={nickname}
-              onChange={(event) => {
-                setNickname(event.target.value);
-                setError("");
-              }}
-              placeholder="ENTER NICKNAME"
-              disabled={loading}
-              className="min-h-[64px] w-full rounded-2xl border-2 border-[#E0DDE5] bg-[#F0EFF2] px-4 text-center text-lg font-bold text-[#31064D] outline-none transition focus:border-[#7950A8] disabled:opacity-50"
-              required
-            />
+          <div className="rounded-2xl border border-purple-100 bg-purple-50/80 p-3.5 text-center text-xs text-purple-900">
+            <span className="font-bold">🎭 Anonymous Mode:</span> You will be automatically assigned a unique identity (e.g. <em>Anonymous_01</em>).
           </div>
 
           {/* ENTER GAME */}

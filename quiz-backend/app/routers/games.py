@@ -51,7 +51,9 @@ def _join_out(membership: GameParticipant) -> JoinOut:
     return JoinOut(
         game_id=membership.game_id,
         participant_id=membership.id,
-        nickname=membership.participant.nickname,
+        nickname=membership.display_name or membership.participant.nickname,
+        display_name=membership.display_name or membership.participant.nickname,
+        is_anonymous=membership.is_anonymous,
         token=membership.token,
         game_status=membership.game.status,
     )
@@ -93,7 +95,7 @@ def create_game(
 )
 def join_game(join_in: JoinRequest, db: Session = Depends(get_db)) -> JoinOut:
     """POST /api/v1/games/join"""
-    return _join_out(participant_service.join_game(db, join_in.pin, join_in.nickname))
+    return _join_out(participant_service.join_game(db, join_in.pin, join_in.nickname, is_anonymous=join_in.is_anonymous))
 
 
 @router.post(
@@ -210,7 +212,7 @@ def score_question(
 )
 def get_leaderboard(
     gameId: int,
-    limit: int = Query(10, ge=1, le=100, description="How many players to return."),
+    limit: int = Query(5, ge=1, le=100, description="How many players to return (default: top 5)."),
     round_id: int | None = Query(None, gt=0, description="Standings for this round only."),
     db: Session = Depends(get_db),
 ) -> LeaderboardOut:

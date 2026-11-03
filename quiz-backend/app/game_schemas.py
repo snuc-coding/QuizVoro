@@ -36,7 +36,8 @@ class GameOut(OrmBase):
 
 class JoinRequest(BaseModel):
     pin: str = Field(..., min_length=4, max_length=10, examples=["48291375"])
-    nickname: str = Field(..., max_length=64, examples=["Rathi"])
+    nickname: str | None = Field(None, max_length=64, examples=["Rathi"])
+    is_anonymous: bool | None = Field(None, description="Whether to participate anonymously.")
 
 
 class RejoinRequest(BaseModel):
@@ -49,6 +50,8 @@ class JoinOut(BaseModel):
     game_id: int
     participant_id: int = Field(..., description="The player's id in this game (game_participants.id).")
     nickname: str
+    display_name: str | None = None
+    is_anonymous: bool = False
     token: str = Field(..., description="Send as the X-Participant-Token header on player endpoints.")
     game_status: str
 
@@ -140,6 +143,9 @@ class LeaderboardEntry(BaseModel):
     rank: int
     participant_id: int
     nickname: str
+    display_name: str | None = None
+    is_anonymous: bool = False
+    is_certificate_eligible: bool = Field(False, description="True for top 3 participants.")
     score: int
     rank_delta: int = Field(..., description="Places climbed since the previous scoring (positive = up).")
     streak: int

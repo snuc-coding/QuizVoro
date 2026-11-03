@@ -92,32 +92,65 @@ def get_game_by_pin(db: Session, pin: str) -> Game:
     return game
 
 
-def join_game(db: Session, pin: str, raw_nickname: str) -> GameParticipant:
+def join_game(db: Session, pin: str, raw_nickname: str | None = None, is_anonymous: bool | None = None) -> GameParticipant:
     """
     Add a new player to the game with this PIN.
 
-    Joining is allowed in the lobby and while the game is running (a late joiner
-    starts at 0). Not allowed once the game has finished.
+    - If is_anonymous is True (or no nickname is provided), automatically assigns
+      the next unique anonymous name (e.g. Anonymous_01, Anonymous_02).
+    - If a nickname is provided and is_anonymous is not True, validates the nickname
+      and uses it for display, maintaining full backward compatibility with tests and callers.
     """
     game = get_game_by_pin(db, pin)
     if game.status == "finished":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This quiz has already ended.")
 
-    try:
-        nickname = check_nickname(raw_nickname)
-    except NicknameRejected as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
-
-    key = nickname_key(nickname)
-    taken = (
+    # Determine unique anonymous candidate name
+    anon_count = (
         db.query(GameParticipant.id)
-        .filter(GameParticipant.game_id == game.id, GameParticipant.nickname_key == key)
-        .first()
+        .filter(GameParticipant.game_id == game.id)
+        .count()
     )
-    if taken is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That nickname is taken in this game. Try another.")
+    idx = anon_count + 1
+    candidate_name = f"Anonymous_{idx:02d}"
+    while db.query(GameParticipant.id).filter(GameParticipant.game_id == game.id, GameParticipant.display_name == candidate_name).first() is not None:
+        idx += 1
+        candidate_name = f"Anonymous_{idx:02d}"
 
-    participant = Participant(nickname=nickname)
+    # Check whether anonymous mode is requested (or needed because nickname is omitted)
+    should_be_anonymous = is_anonymous is True or not (raw_nickname and raw_nickname.strip())
+
+    if should_be_anonymous:
+        # If player gave a nickname but requested anonymity, record it internally
+        if raw_nickname and raw_nickname.strip():
+            try:
+                internal_nickname = check_nickname(raw_nickname)
+            except NicknameRejected:
+                internal_nickname = candidate_name
+        else:
+            internal_nickname = candidate_name
+
+        display_name = candidate_name
+        key = nickname_key(candidate_name)
+        participant = Participant(nickname=internal_nickname)
+        is_anon_flag = True
+    else:
+        try:
+            clean_nick = check_nickname(raw_nickname)
+        except NicknameRejected as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
+        display_name = clean_nick
+        key = nickname_key(clean_nick)
+        taken = (
+            db.query(GameParticipant.id)
+            .filter(GameParticipant.game_id == game.id, GameParticipant.nickname_key == key)
+            .first()
+        )
+        if taken is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That nickname is taken in this game. Try another.")
+        participant = Participant(nickname=clean_nick)
+        is_anon_flag = False
+
     db.add(participant)
     db.flush()
     membership = GameParticipant(
@@ -126,13 +159,34 @@ def join_game(db: Session, pin: str, raw_nickname: str) -> GameParticipant:
         token=secrets.token_urlsafe(24),
         nickname_key=key,
         is_active=True,
+        is_anonymous=is_anon_flag,
+        display_name=display_name,
     )
     db.add(membership)
     try:
         db.commit()
-    except IntegrityError:  # someone took the same nickname a moment earlier
+    except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That nickname is taken in this game. Try another.") from None
+        if should_be_anonymous:
+            idx += 1
+            fallback_name = f"Anonymous_{idx:02d}"
+            p = Participant(nickname=fallback_name)
+            db.add(p)
+            db.flush()
+            membership = GameParticipant(
+                game_id=game.id,
+                participant_id=p.id,
+                token=secrets.token_urlsafe(24),
+                nickname_key=nickname_key(fallback_name),
+                is_active=True,
+                is_anonymous=True,
+                display_name=fallback_name,
+            )
+            db.add(membership)
+            db.commit()
+        else:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That nickname is taken in this game. Try another.") from None
+
     db.refresh(membership)
     return membership
 

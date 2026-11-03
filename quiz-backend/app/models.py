@@ -338,6 +338,10 @@ class GameParticipant(Base):
     # False once the host removes the player (Dev 3 sets this).
     is_active = Column(Boolean, default=True, server_default="1", nullable=False)
 
+    # ── Anonymous mode & display name ────────────────────────────────────────
+    is_anonymous = Column(Boolean, default=False, server_default="0", nullable=False)
+    display_name = Column(String(64), nullable=True)
+
     # ── Dev 2: scoring state, updated once per question when it is scored ────
     correct_count = Column(Integer, default=0, server_default="0", nullable=False)
     # Sum of response times on CORRECT answers only (tie-break 3).

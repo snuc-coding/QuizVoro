@@ -52,6 +52,7 @@ function QuestionScreen() {
 
   const token = participantData.token;
   const nickname = participantData.nickname || "Player";
+  const isAnonymous = Boolean(participantData.isAnonymous);
 
   // Keep this state per game and participant, and per browser tab.
   const storageKey = `quizvoro:participant-screen:${gameId}:${nickname}`;
@@ -500,6 +501,11 @@ function QuestionScreen() {
       <header className="flex w-full max-w-md items-center justify-between border-b border-white/20 pb-4">
         <div className="flex items-center gap-2">
           <span className="text-lg font-bold">{nickname}</span>
+          {isAnonymous && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-purple-900/60 px-2 py-0.5 text-xs font-semibold text-[#91F0DF] border border-[#91F0DF]/40">
+              🕵️ Anonymous Mode
+            </span>
+          )}
         </div>
 
         {myResult && (
@@ -523,6 +529,10 @@ function QuestionScreen() {
             <p className="mt-2 text-gray-600">
               Welcome, <strong className="font-bold">{nickname}</strong>!
             </p>
+
+            <div className="mt-3 rounded-xl border border-purple-200 bg-purple-50 p-2.5 text-xs text-purple-900">
+              <span className="font-bold">Assigned Identity:</span> You are participating as <strong>{nickname}</strong>.
+            </div>
 
             <div className="mt-6 rounded-2xl bg-[#31064D] p-6 text-center text-white">
               <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-4 border-white/30 border-t-[#91F0DF]" />
@@ -777,14 +787,51 @@ function QuestionScreen() {
 
             {leaderboard.length > 0 && (
               <section className="mt-6 border-t pt-5 text-left">
-                <h3 className="brand-font text-xl font-bold">Leaderboard</h3>
-                <div className="mt-3 space-y-2">
-                  {leaderboard.slice(0, 5).map((entry, index) => (
-                    <div key={entry.participant_id} className="flex items-center justify-between rounded-xl bg-[#F0EAF7] px-4 py-3 text-sm font-semibold">
-                      <span className="truncate"><strong className="mr-2">#{entry.rank || index + 1}</strong>{entry.nickname}</span>
-                      <span className="ml-3 shrink-0 text-[#31064D]">{entry.score} pts</span>
-                    </div>
-                  ))}
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="brand-font text-xl font-bold">Top 5 Leaderboard</h3>
+                  <span className="text-xs text-[#7950A8] font-semibold">Asteris Official</span>
+                </div>
+                <div className="space-y-2">
+                  {leaderboard.slice(0, 5).map((entry, index) => {
+                    const rank = Number(entry.rank || index + 1);
+                    const isTopThree = rank <= 3;
+                    return (
+                      <div
+                        key={entry.participant_id || index}
+                        className={`flex items-center justify-between rounded-xl px-4 py-3 text-sm font-semibold transition ${
+                          rank === 1
+                            ? "bg-amber-100 text-amber-900 border border-amber-300"
+                            : rank === 2
+                              ? "bg-slate-100 text-slate-800 border border-slate-300"
+                              : rank === 3
+                                ? "bg-amber-50 text-amber-900 border border-amber-200"
+                                : "bg-[#F0EAF7] text-[#31064D]"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="shrink-0 font-extrabold">
+                            {rank === 1 ? "🥇 #1" : rank === 2 ? "🥈 #2" : rank === 3 ? "🥉 #3" : `#${rank}`}
+                          </span>
+                          <span className="truncate">
+                            {entry.display_name || entry.nickname}
+                          </span>
+                          {entry.is_anonymous && (
+                            <span className="rounded bg-black/10 px-1 py-0.2 text-[10px] font-bold">
+                              Anon
+                            </span>
+                          )}
+                          {isTopThree && (
+                            <span className="hidden sm:inline text-[10px] bg-white/70 px-1.5 py-0.5 rounded font-bold text-purple-900">
+                              🎓 Certificate
+                            </span>
+                          )}
+                        </div>
+                        <span className="ml-3 shrink-0 font-bold tabular-nums">
+                          {entry.score} pts
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             )}

@@ -810,9 +810,9 @@ function HostDashboard() {
                       No scores recorded.
                     </p>
                   ) : (
-                    leaderboard.map((entry, index) => (
+                    leaderboard.slice(0, 5).map((entry, index) => (
                       <div
-                        key={entry.participant_id}
+                        key={entry.participant_id || index}
                         className={`flex items-center justify-between gap-3 rounded-xl border p-4 ${
                           index === 0
                             ? "border-amber-300 bg-amber-100"
@@ -825,12 +825,24 @@ function HostDashboard() {
                       >
                         <div className="flex min-w-0 items-center gap-4">
                           <span className="w-9 shrink-0 text-center text-xl font-extrabold">
-                            #{entry.rank}
+                            {index === 0 ? "👑 #1" : index === 1 ? "🥈 #2" : index === 2 ? "🥉 #3" : `#${entry.rank || index + 1}`}
                           </span>
 
-                          <span className="truncate font-semibold">
-                            {entry.nickname}
-                          </span>
+                          <div className="flex items-center gap-2 truncate">
+                            <span className="truncate font-semibold">
+                              {entry.display_name || entry.nickname}
+                            </span>
+                            {entry.is_anonymous && (
+                              <span className="rounded bg-black/10 px-1.5 py-0.5 text-xs font-bold text-purple-900">
+                                Anon
+                              </span>
+                            )}
+                            {index < 3 && (
+                              <span className="rounded bg-yellow-200/80 px-2 py-0.5 text-xs font-bold text-yellow-950">
+                                🎓 Certificate
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         <span className="shrink-0 font-bold text-[#C51E50]">

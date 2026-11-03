@@ -146,7 +146,12 @@ class GameOrchestrator:
         question_ids = cls.get_quiz_question_ids(db, game.quiz_id)
         players = participant_service.active_players(db, game.id)
         player_rows = [
-            {"participant_id": player.id, "nickname": player.participant.nickname}
+            {
+                "participant_id": player.id,
+                "nickname": player.display_name or player.participant.nickname,
+                "display_name": player.display_name or player.participant.nickname,
+                "is_anonymous": player.is_anonymous,
+            }
             for player in players
         ]
 
@@ -186,7 +191,7 @@ class GameOrchestrator:
 
         leaderboard = None
         if snapshot_status in ("reveal", "finished"):
-            leaderboard = leaderboard_service.get_leaderboard(db, game, limit=10).model_dump(mode="json")
+            leaderboard = leaderboard_service.get_leaderboard(db, game, limit=5).model_dump(mode="json")
 
         return {
             "game_id": game.id,
@@ -269,12 +274,20 @@ class GameOrchestrator:
                 _deadline_tasks.pop(game_id, None)
 
     @staticmethod
-    async def broadcast_player_joined(game_id: int, participant_id: int, nickname: str, total: int):
+    async def broadcast_player_joined(
+        game_id: int,
+        participant_id: int,
+        nickname: str,
+        total: int,
+        is_anonymous: bool = False,
+    ):
         msg = WebSocketMessage(
             event=EventType.PLAYER_JOINED.value,
             data=PlayerJoinedPayload(
                 participant_id=participant_id,
                 nickname=nickname,
+                display_name=nickname,
+                is_anonymous=is_anonymous,
                 total_players=total,
             ).model_dump(mode="json"),
         )
@@ -282,12 +295,20 @@ class GameOrchestrator:
         await manager.broadcast_to_role(game_id, "stage", msg)
 
     @staticmethod
-    async def broadcast_player_left(game_id: int, participant_id: int, total: int, nickname: str | None = None):
+    async def broadcast_player_left(
+        game_id: int,
+        participant_id: int,
+        total: int,
+        nickname: str | None = None,
+        is_anonymous: bool = False,
+    ):
         msg = WebSocketMessage(
             event=EventType.PLAYER_LEFT.value,
             data=PlayerLeftPayload(
                 participant_id=participant_id,
                 nickname=nickname,
+                display_name=nickname,
+                is_anonymous=is_anonymous,
                 total_players=total,
             ).model_dump(mode="json"),
         )
@@ -559,7 +580,7 @@ class GameOrchestrator:
             # Reuses Developer 2's answer_service.score_question (safe to call twice)
             result = answer_service.score_question(db, game, game.current_question_id)
             cls._cancel_deadline(game_id)
-            board = leaderboard_service.get_leaderboard(db, game, limit=10)
+            board = leaderboard_service.get_leaderboard(db, game, limit=5)
 
             # 1. Broadcast correct option & distribution to Stage and Host
             reveal_payload = AnswerRevealPayload(
@@ -583,9 +604,12 @@ class GameOrchestrator:
             all_stats = leaderboard_service.stats_for_all(db, game, players)  # one pass, not one per player
             for player in players:
                 stats = all_stats[player.id]
+                player_name = player.display_name or player.participant.nickname
                 personal_payload = PlayerPersonalResultPayload(
                     participant_id=player.id,
-                    nickname=player.participant.nickname,
+                    nickname=player_name,
+                    display_name=player_name,
+                    is_anonymous=player.is_anonymous,
                     score=stats.score,
                     rank=stats.rank,
                     rank_delta=stats.rank_delta,
@@ -622,7 +646,7 @@ class GameOrchestrator:
             db.commit()
             db.refresh(game)
 
-            board = leaderboard_service.get_leaderboard(db, game, limit=10)
+            board = leaderboard_service.get_leaderboard(db, game, limit=5)
             msg = WebSocketMessage(
                 event=EventType.GAME_FINISHED.value,
                 data={"game_id": game.id, "status": "finished", "leaderboard": board.model_dump(mode="json")},

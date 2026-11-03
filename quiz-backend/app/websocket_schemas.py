@@ -78,12 +78,16 @@ class HostCommandIn(BaseModel):
 class PlayerJoinedPayload(BaseModel):
     participant_id: int
     nickname: str
+    display_name: str | None = None
+    is_anonymous: bool = False
     total_players: int
 
 
 class PlayerLeftPayload(BaseModel):
     participant_id: int
     nickname: str | None = None
+    display_name: str | None = None
+    is_anonymous: bool = False
     total_players: int
 
 
@@ -137,6 +141,8 @@ class AnswerRevealPayload(BaseModel):
 class PlayerPersonalResultPayload(BaseModel):
     participant_id: int
     nickname: str
+    display_name: str | None = None
+    is_anonymous: bool = False
     score: int
     rank: int | None
     rank_delta: int

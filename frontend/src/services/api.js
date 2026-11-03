@@ -367,11 +367,11 @@ export const stageApi = {
 // ── Participant API ──────────────────────────────────────────────────────────
 
 export const participantApi = {
-  async joinGame(pin, nickname) {
+  async joinGame(pin, nickname, is_anonymous = false) {
     const data = await apiRequest("/api/v1/games/join", {
       method: "POST",
       skipAuth: true,
-      body: JSON.stringify({ pin, nickname }),
+      body: JSON.stringify({ pin, nickname, is_anonymous }),
     });
 
     setParticipantSession(data);

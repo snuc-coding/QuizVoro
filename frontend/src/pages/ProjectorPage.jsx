@@ -796,18 +796,18 @@ function ProjectorPage() {
                       key={entry.participant_id || idx}
                       className={`flex items-center justify-between gap-4 rounded-2xl p-5 shadow-xl transition ${
                         idx === 0
-                          ? "scale-[1.02] bg-amber-400 text-[#31064D]"
+                          ? "scale-[1.02] bg-gradient-to-r from-amber-400 to-yellow-300 text-[#31064D] border-2 border-yellow-200"
                           : idx === 1
-                            ? "bg-slate-200 text-[#31064D]"
+                            ? "bg-gradient-to-r from-slate-200 to-slate-100 text-[#31064D] border-2 border-slate-300"
                             : idx === 2
-                              ? "bg-amber-700 text-white"
+                              ? "bg-gradient-to-r from-amber-700 to-amber-800 text-white border-2 border-amber-600"
                               : "border border-white/10 bg-white/10 text-white"
                       }`}
                     >
                       <div className="flex min-w-0 items-center gap-4">
-                        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-black/10 text-xl font-black">
+                        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-black/10 text-2xl font-black">
                           {idx === 0
-                            ? "🥇"
+                            ? "👑"
                             : idx === 1
                               ? "🥈"
                               : idx === 2
@@ -816,13 +816,27 @@ function ProjectorPage() {
                         </span>
 
                         <div className="min-w-0 text-left">
-                          <p className="truncate text-lg font-extrabold sm:text-2xl">
-                            {entry.nickname}
-                          </p>
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-lg font-extrabold sm:text-2xl">
+                              {entry.display_name || entry.nickname}
+                            </p>
+                            {entry.is_anonymous && (
+                              <span className="rounded-md bg-black/20 px-1.5 py-0.5 text-xs font-bold uppercase tracking-wider">
+                                Anon
+                              </span>
+                            )}
+                          </div>
 
-                          <p className="text-xs font-semibold opacity-70">
-                            RANK #{entry.rank || idx + 1}
-                          </p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <p className="text-xs font-bold uppercase opacity-80">
+                              RANK #{entry.rank || idx + 1}
+                            </p>
+                            {idx < 3 && (
+                              <span className="rounded bg-black/20 px-2 py-0.5 text-xs font-black uppercase tracking-wider">
+                                🎓 Certificate Recipient
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
 

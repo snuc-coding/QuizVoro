@@ -40,7 +40,7 @@ def _build(
     standings: list[scoring.Standing],
     moves: Moves,
     scored_count: int,
-    limit: int,
+    limit: int = 5,
 ) -> LeaderboardOut:
     by_id = {player.id: player for player in players}
     ordered = sorted(standings, key=scoring.rank_key)
@@ -48,7 +48,10 @@ def _build(
         LeaderboardEntry(
             rank=position,
             participant_id=s.participant_id,
-            nickname=by_id[s.participant_id].participant.nickname,
+            nickname=by_id[s.participant_id].display_name or by_id[s.participant_id].participant.nickname,
+            display_name=by_id[s.participant_id].display_name or by_id[s.participant_id].participant.nickname,
+            is_anonymous=by_id[s.participant_id].is_anonymous,
+            is_certificate_eligible=(position <= 3),
             score=s.score,
             rank_delta=scoring.rank_delta(*moves[s.participant_id]),
             streak=by_id[s.participant_id].current_streak,
@@ -59,7 +62,7 @@ def _build(
     climbers = [
         ClimberOut(
             participant_id=climber.participant_id,
-            nickname=by_id[climber.participant_id].participant.nickname,
+            nickname=by_id[climber.participant_id].display_name or by_id[climber.participant_id].participant.nickname,
             rank_delta=climber.rank_delta,
         )
         for climber in scoring.biggest_climbers(moves)
@@ -126,7 +129,7 @@ def _round_leaderboard(db: Session, game: Game, round_id: int, limit: int) -> Le
     return _build(game, round_.id, players, standings, moves, len(question_ids), limit)
 
 
-def get_leaderboard(db: Session, game: Game, limit: int = 10, round_id: int | None = None) -> LeaderboardOut:
+def get_leaderboard(db: Session, game: Game, limit: int = 5, round_id: int | None = None) -> LeaderboardOut:
     """Overall standings, or one round's when round_id is given."""
     if round_id is not None:
         return _round_leaderboard(db, game, round_id, limit)
