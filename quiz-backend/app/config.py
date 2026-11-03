@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # ── Media uploads ─────────────────────────────────────────────────────────
     MEDIA_DIR: str = "media"
     MAX_UPLOAD_SIZE_MB: int = 10
+    MAX_VIDEO_UPLOAD_SIZE_MB: int = 100
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     # Stored as a single comma-separated string in .env, parsed to a list here.

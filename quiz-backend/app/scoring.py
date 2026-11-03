@@ -22,7 +22,6 @@ Rules (from the project spec):
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -65,7 +64,11 @@ def points_for(correct: bool, time_ms: int, time_limit_s: int, base_points: int)
         return 0
     limit_ms = max(1, time_limit_s * 1000)
     taken = min(max(time_ms, 0), limit_ms)
-    return math.floor(base_points * (1 - 0.5 * taken / limit_ms) + 0.5)
+    # points = base * (1 - taken / (2 * limit)). Keep this in integer
+    # arithmetic so half-point rounding cannot drift with floating precision.
+    numerator = base_points * (2 * limit_ms - taken)
+    denominator = 2 * limit_ms
+    return (numerator + limit_ms) // denominator
 
 
 def next_streak(current: int, best: int, correct: bool) -> tuple[int, int]:

@@ -86,7 +86,6 @@ function App() {
       : location.pathname.startsWith("/admin/create")
         ? "CREATE"
         : location.pathname === "/admin/quizzes" ||
-            location.pathname === "/admin/presentation" ||
             location.pathname === "/admin/host"
           ? "PRESENT"
           : "";

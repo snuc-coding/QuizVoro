@@ -139,6 +139,7 @@ function CreateQuizPage() {
       });
 
       // 3. Create Questions & Upload Media if any
+      const mediaUploadErrors = [];
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
 
@@ -161,6 +162,7 @@ function CreateQuizPage() {
           try {
             await quizApi.uploadMedia(createdQ.id, q.mediaFile);
           } catch (uploadErr) {
+            mediaUploadErrors.push(`Question ${i + 1}: ${uploadErr.message}`);
             console.warn(
               `Media upload warning for question ${i + 1}:`,
               uploadErr
@@ -169,7 +171,9 @@ function CreateQuizPage() {
         }
       }
 
-      alert("Quiz successfully created and saved to the backend!");
+      alert(mediaUploadErrors.length
+        ? `Quiz created, but some media could not be uploaded:\n${mediaUploadErrors.join("\n")}`
+        : "Quiz successfully created and saved to the backend!");
       navigate("/admin/quizzes", { replace: true });
     } catch (err) {
       console.error("Failed to save quiz to backend:", err);
@@ -397,12 +401,12 @@ function CreateQuizPage() {
                   </label>
 
                   <p className="mb-4 text-xs text-gray-500">
-                    Optional: Add an image, audio clip, or video to your question.
+                    Optional: Add an image or audio file up to 10 MB, or an MP4/WebM video up to 100 MB.
                   </p>
 
                   <input
                     type="file"
-                    accept="image/*,audio/*,video/*"
+                    accept="image/jpeg,image/png,image/gif,image/webp,audio/mpeg,audio/wav,audio/ogg,video/mp4,video/webm"
                     onChange={(e) =>
                       handleFileChange(
                         questionIndex,

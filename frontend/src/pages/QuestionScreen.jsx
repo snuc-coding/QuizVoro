@@ -1,7 +1,11 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
-import { participantApi, API_BASE_URL } from "../services/api";
+import {
+  participantApi,
+  getParticipantSession,
+  API_BASE_URL,
+} from "../services/api";
 import { QuizWebSocket } from "../services/websocket";
 
 const optionColors = [
@@ -44,7 +48,7 @@ function QuestionScreen() {
   const navigate = useNavigate();
 
   const participantData =
-    location.state || participantApi.getParticipantSession?.() || {};
+    location.state || getParticipantSession() || {};
 
   const token = participantData.token;
   const nickname = participantData.nickname || "Player";
@@ -81,6 +85,9 @@ function QuestionScreen() {
     savedState?.myResult || null
   );
   const [error, setError] = useState("");
+  const [answerError, setAnswerError] = useState("");
+  const [leaderboard, setLeaderboard] = useState(savedState?.leaderboard || []);
+  const [revealedData, setRevealedData] = useState(savedState?.revealedData || null);
 
   const wsRef = useRef(null);
   const timerRef = useRef(null);
@@ -98,6 +105,8 @@ function QuestionScreen() {
       selectedOptionId,
       answerLocked,
       myResult,
+      leaderboard,
+      revealedData,
     };
 
     try {
@@ -116,6 +125,8 @@ function QuestionScreen() {
     selectedOptionId,
     answerLocked,
     myResult,
+    leaderboard,
+    revealedData,
   ]);
 
   // Start an accurate countdown using a local target time.
@@ -209,6 +220,21 @@ function QuestionScreen() {
         setSelectedOptionId(null);
         setIsSubmitting(false);
         setMyResult(null);
+        setRevealedData(null);
+
+        if (data.is_revealed) {
+          clearInterval(timerRef.current);
+          setRevealedData(data.revealed_data || null);
+          setAnswerLocked(true);
+          setGameState("reveal");
+          try {
+            const stats = await participantApi.getMyStats(gameId);
+            if (!cancelled && stats) setMyResult(stats);
+          } catch (statsError) {
+            console.warn("Could not restore participant results:", statsError);
+          }
+          return;
+        }
 
         if (data.already_answered) {
           clearInterval(timerRef.current);
@@ -225,6 +251,7 @@ function QuestionScreen() {
             ) {
               setMyResult(stats);
               setAnswerLocked(true);
+              setRevealedData(data.revealed_data || null);
               setGameState("reveal");
               return;
             }
@@ -306,6 +333,7 @@ function QuestionScreen() {
 
       onOpen: () => {
         console.log("Participant WS connected.");
+        restoreParticipantState();
       },
 
       onError: (err) => {
@@ -323,6 +351,8 @@ function QuestionScreen() {
           setAnswerLocked(false);
           setIsSubmitting(false);
           setMyResult(null);
+          setLeaderboard([]);
+          setRevealedData(null);
 
           startCountdown(data.time_limit || 15);
         } else if (event === "ANSWER_ACK") {
@@ -330,6 +360,14 @@ function QuestionScreen() {
           setIsSubmitting(false);
           setGameState("answered");
           clearInterval(timerRef.current);
+        } else if (event === "ERROR") {
+          // The server can reject an answer (for example, if the deadline has
+          // passed or the question has just been revealed). Do not leave the
+          // player stuck in the optimistic "answered" state in that case.
+          setIsSubmitting(false);
+          setSelectedOptionId(null);
+          setAnswerLocked(false);
+          setAnswerError(data?.detail || "Your answer could not be recorded. Please try again.");
         } else if (event === "GAME_PAUSED") {
           clearInterval(timerRef.current);
 
@@ -347,6 +385,7 @@ function QuestionScreen() {
         } else if (event === "ANSWER_REVEALED") {
           setGameState("reveal");
           setAnswerLocked(true);
+          setRevealedData(data);
           clearInterval(timerRef.current);
 
           // The backend sends this participant's personalized result as my_stats.
@@ -364,12 +403,15 @@ function QuestionScreen() {
           }
         } else if (event === "PLAYER_PERSONAL_RESULT") {
           setMyResult(data?.my_stats || data);
+        } else if (event === "LEADERBOARD_UPDATED") {
+          setLeaderboard(data?.top || []);
         } else if (event === "PLAYER_KICKED") {
           setGameState("kicked");
           clearInterval(timerRef.current);
         } else if (event === "GAME_FINISHED") {
           setGameState("finished");
           clearInterval(timerRef.current);
+          setLeaderboard(data?.leaderboard?.top || []);
 
           participantApi
             .getMyStats(gameId)
@@ -382,9 +424,6 @@ function QuestionScreen() {
     ws.connect();
     wsRef.current = ws;
 
-    // Fetch the current question when the player opens or refreshes the page.
-    restoreParticipantState();
-
     return () => {
       cancelled = true;
       clearInterval(timerRef.current);
@@ -392,7 +431,9 @@ function QuestionScreen() {
     };
   }, [gameId, token, startCountdown, savedState]);
 
-  // Answer Submission (via WS if open, fallback to REST)
+  // Submit through REST so the player only sees a locked answer after the
+  // backend confirms it. The participant WebSocket remains responsible for
+  // live question and game-state events.
   const handleSelectOption = useCallback(
     async (optionId) => {
       if (
@@ -405,33 +446,21 @@ function QuestionScreen() {
       }
 
       setSelectedOptionId(optionId);
+      setAnswerError("");
       setIsSubmitting(true);
 
       try {
-        if (
-          wsRef.current &&
-          wsRef.current.ws?.readyState === WebSocket.OPEN
-        ) {
-          wsRef.current.sendAnswer({
-            question_id: currentQuestion.id,
-            option_id: optionId,
-          });
+        await participantApi.submitAnswer(gameId, {
+          question_id: currentQuestion.id,
+          option_id: optionId,
+        });
 
-          setAnswerLocked(true);
-          setGameState("answered");
-        } else {
-          await participantApi.submitAnswer(gameId, {
-            question_id: currentQuestion.id,
-            option_id: optionId,
-          });
-
-          setAnswerLocked(true);
-          setGameState("answered");
-        }
+        setAnswerLocked(true);
+        setGameState("answered");
       } catch (err) {
         console.error("Answer submission failed:", err);
         setSelectedOptionId(null);
-        alert(err.message || "Failed to lock in your answer.");
+        setAnswerError(err.message || "Failed to lock in your answer.");
       } finally {
         setIsSubmitting(false);
       }
@@ -623,6 +652,11 @@ function QuestionScreen() {
                 );
               })}
             </div>
+            {answerError && (
+              <p role="alert" className="rounded-xl bg-red-950/70 px-4 py-3 text-sm font-semibold text-red-100">
+                {answerError}
+              </p>
+            )}
           </div>
         )}
 
@@ -667,6 +701,15 @@ function QuestionScreen() {
             <h2 className="brand-font text-3xl font-bold">
               Question Scored!
             </h2>
+
+            {currentQuestion?.options?.length > 0 && revealedData?.correct_option_id != null && (
+              <div className="mt-4 rounded-2xl bg-green-100 p-4 text-left text-green-900">
+                <p className="text-xs font-bold uppercase tracking-wider">Correct answer</p>
+                <p className="mt-1 text-lg font-extrabold">
+                  {currentQuestion.options.find((option) => option.id === revealedData.correct_option_id)?.option_text || "Correct option revealed"}
+                </p>
+              </div>
+            )}
 
             {myResult?.last_result ? (
               <div className="mt-4">
@@ -730,6 +773,20 @@ function QuestionScreen() {
                   </p>
                 </div>
               </div>
+            )}
+
+            {leaderboard.length > 0 && (
+              <section className="mt-6 border-t pt-5 text-left">
+                <h3 className="brand-font text-xl font-bold">Leaderboard</h3>
+                <div className="mt-3 space-y-2">
+                  {leaderboard.slice(0, 5).map((entry, index) => (
+                    <div key={entry.participant_id} className="flex items-center justify-between rounded-xl bg-[#F0EAF7] px-4 py-3 text-sm font-semibold">
+                      <span className="truncate"><strong className="mr-2">#{entry.rank || index + 1}</strong>{entry.nickname}</span>
+                      <span className="ml-3 shrink-0 text-[#31064D]">{entry.score} pts</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
             )}
           </div>
         )}

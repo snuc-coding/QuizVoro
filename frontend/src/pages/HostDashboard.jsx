@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
-import { hostApi, quizApi } from "../services/api";
+import { API_BASE_URL, hostApi, quizApi } from "../services/api";
 import { QuizWebSocket } from "../services/websocket";
 
 function HostDashboard() {
@@ -28,6 +28,25 @@ function HostDashboard() {
 
   const wsRef = useRef(null);
 
+  function applyGameSnapshot(snapshot) {
+    if (!snapshot) return;
+    setGame((previous) => ({
+      ...(previous || {}),
+      id: Number(gameId),
+      quiz_id: Number(quizId),
+      pin: snapshot.pin,
+      status: snapshot.game_status || "lobby",
+    }));
+    setStatus(snapshot.game_status || "lobby");
+    setPlayers(Array.isArray(snapshot.players) ? snapshot.players : []);
+    setCurrentQuestion(snapshot.current_question || null);
+    setQuestionNumber(Number(snapshot.question_number) || 1);
+    setTotalQuestions(Number(snapshot.total_questions) || 1);
+    setAnsweredCount(Number(snapshot.answered_count) || 0);
+    setRevealedData(snapshot.revealed_data || null);
+    setLeaderboard(snapshot.leaderboard?.top || []);
+  }
+
   // Load quiz details and active game from the backend/session.
   useEffect(() => {
     if (!quizId || !gameId) {
@@ -45,13 +64,8 @@ function HostDashboard() {
         const tokenData = await hostApi.getStageToken(gameId);
         if (isMounted) setStageToken(tokenData.stage_token);
 
-        const rawGame = sessionStorage.getItem("quizvoro_active_game");
-
-        if (rawGame && isMounted) {
-          const parsed = JSON.parse(rawGame);
-          setGame(parsed);
-          setStatus(parsed.status || "lobby");
-        }
+        const snapshot = await hostApi.getGameState(gameId);
+        if (isMounted) applyGameSnapshot(snapshot);
       } catch (err) {
         console.error("Failed to load host initial data:", err);
 
@@ -78,6 +92,9 @@ function HostDashboard() {
 
       onOpen: () => {
         setWsConnected(true);
+        hostApi.getGameState(gameId)
+          .then(applyGameSnapshot)
+          .catch((err) => console.warn("Could not refresh host game state:", err));
       },
 
       onClose: () => {
@@ -692,6 +709,28 @@ function HostDashboard() {
                   <h2 className="brand-font mt-3 text-2xl font-bold leading-snug sm:text-3xl">
                     {currentQuestion?.question_text || "Current Question"}
                   </h2>
+
+                  {currentQuestion?.media_url && (() => {
+                    const mediaUrl = /^https?:\/\//i.test(currentQuestion.media_url)
+                      ? currentQuestion.media_url
+                      : `${API_BASE_URL.replace(/\/$/, "")}${currentQuestion.media_url.startsWith("/") ? "" : "/"}${currentQuestion.media_url}`;
+                    const mediaType = String(currentQuestion.media_type || "").toLowerCase();
+
+                    if (mediaType === "video") {
+                      return (
+                        <video controls playsInline preload="metadata" className="mt-5 max-h-80 w-full rounded-xl bg-black object-contain" src={mediaUrl}>
+                          Your browser cannot play this video format.
+                        </video>
+                      );
+                    }
+                    if (mediaType === "audio") {
+                      return <audio controls preload="metadata" className="mt-5 w-full" src={mediaUrl} />;
+                    }
+                    if (mediaType === "image") {
+                      return <img src={mediaUrl} alt="Question media" className="mx-auto mt-5 max-h-80 max-w-full rounded-xl object-contain" />;
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2">

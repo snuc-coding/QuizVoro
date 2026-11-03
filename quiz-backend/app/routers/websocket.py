@@ -111,6 +111,11 @@ async def host_websocket_endpoint(
 
     await websocket.accept()
     await manager.connect_host(gameId, websocket)
+    try:
+        with SessionLocal() as state_db:
+            orchestrator.ensure_deadline_timer(state_db, gameId)
+    except Exception as exc:
+        logger.error("Could not restore timer for host game %s: %s", gameId, exc)
 
     try:
         while True:
@@ -273,6 +278,19 @@ async def stage_websocket_endpoint(
 
     await websocket.accept()
     await manager.connect_stage(gameId, websocket)
+
+    # Every new/reconnected projector receives a fresh snapshot before live events.
+    try:
+        with SessionLocal() as state_db:
+            orchestrator.ensure_deadline_timer(state_db, gameId)
+        state = await _db_call(orchestrator.game_state_snapshot, gameId)
+        await websocket.send_json({
+            "event": "STAGE_STATE",
+            "data": state,
+            "timestamp": _now().isoformat(),
+        })
+    except Exception as exc:
+        logger.error("Could not restore stage state for game %s: %s", gameId, exc)
 
     try:
         while True:

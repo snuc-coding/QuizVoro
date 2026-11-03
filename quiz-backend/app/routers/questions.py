@@ -254,7 +254,12 @@ async def upload_media(
     file_path = media_dir / safe_filename
 
     # ── Stream upload in chunks with size and magic-byte check ─────────────────
-    max_bytes = settings.max_upload_size_bytes
+    max_upload_mb = (
+        settings.MAX_VIDEO_UPLOAD_SIZE_MB
+        if media_category == "video"
+        else settings.MAX_UPLOAD_SIZE_MB
+    )
+    max_bytes = max_upload_mb * 1024 * 1024
     accumulated_bytes = 0
     first_chunk = True
 
@@ -269,7 +274,7 @@ async def upload_media(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=(
                             f"File is too large. Maximum allowed size is "
-                            f"{settings.MAX_UPLOAD_SIZE_MB} MB."
+                            f"{max_upload_mb} MB."
                         ),
                     )
 

@@ -27,10 +27,11 @@ export class QuizWebSocket {
     this.reconnectTimer = null;
     this.isManualClosed = false;
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 10;
   }
 
   connect() {
+    if (this.isManualClosed) return;
+    if (this.ws && [WebSocket.CONNECTING, WebSocket.OPEN].includes(this.ws.readyState)) return;
     this.isManualClosed = false;
 
     // Determine authorization token based on role
@@ -54,20 +55,24 @@ export class QuizWebSocket {
     )}`;
 
     try {
-      this.ws = new WebSocket(endpoint);
+      const socket = new WebSocket(endpoint);
+      this.ws = socket;
     } catch (err) {
       this.onError(err);
       this._scheduleReconnect();
       return;
     }
 
-    this.ws.onopen = () => {
+    const socket = this.ws;
+    socket.onopen = () => {
+      if (this.ws !== socket || this.isManualClosed) return;
       this.reconnectAttempts = 0;
       this._startPing();
       this.onOpen();
     };
 
-    this.ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (this.ws !== socket) return;
       try {
         const payload = JSON.parse(event.data);
         const eventType = payload.event;
@@ -78,11 +83,12 @@ export class QuizWebSocket {
       }
     };
 
-    this.ws.onerror = (err) => {
+    socket.onerror = (err) => {
       this.onError(err);
     };
 
-    this.ws.onclose = (event) => {
+    socket.onclose = (event) => {
+      if (this.ws === socket) this.ws = null;
       this._stopPing();
       this.onClose(event);
       if (!this.isManualClosed) {
@@ -108,20 +114,20 @@ export class QuizWebSocket {
   }
 
   _scheduleReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.warn(`WebSocket reached max reconnect attempts (${this.maxReconnectAttempts}).`);
-      return;
-    }
-
-    const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 10000);
+    if (this.isManualClosed || this.reconnectTimer) return;
+    const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 30000);
     this.reconnectAttempts += 1;
 
-    clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       if (!this.isManualClosed) {
         this.connect();
       }
     }, delay);
+  }
+
+  setToken(token) {
+    if (token) this.token = token;
   }
 
   // Send host control command

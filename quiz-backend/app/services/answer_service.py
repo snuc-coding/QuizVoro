@@ -100,6 +100,8 @@ def current_question(db: Session, game_id: int, player: GameParticipant) -> Curr
 
     opened_at = scoring.as_utc(game.current_question_started_at)
     question_ids = _quiz_question_ids(db, game.quiz_id)
+    revealed = _is_scored(db, game.id, question.id)
+    revealed_data = score_question(db, game, question.id).model_dump(mode="json") if revealed else None
     return CurrentQuestionOut(
         question=participant_question(question),
         question_number=question_ids.index(question.id) + 1,
@@ -108,6 +110,8 @@ def current_question(db: Session, game_id: int, player: GameParticipant) -> Curr
         deadline=opened_at + timedelta(seconds=question.time_limit),
         server_time=_now(),
         already_answered=_answer_of(db, game.id, player.id, question.id) is not None,
+        is_revealed=revealed,
+        revealed_data=revealed_data,
     )
 
 
@@ -134,6 +138,16 @@ def submit_answer(db: Session, game_id: int, player: GameParticipant, answer_in:
     never says. Late, duplicate and out-of-turn answers are rejected.
     """
     game = get_player_game(db, game_id, player)
+    # Serialize answer acceptance with reveal/scoring and question transitions.
+    # Otherwise an answer can pass the "not scored" check just as reveal scores
+    # the question, then commit too late to be included in the result.
+    game = (
+        db.query(Game)
+        .filter(Game.id == game_id)
+        .populate_existing()
+        .with_for_update()
+        .one()
+    )
     _require_active(game)
     if answer_in.question_id != game.current_question_id:
         raise _conflict("That question is not open.")
@@ -246,6 +260,16 @@ def score_question(db: Session, game: Game, question_id: int) -> ScoreQuestionOu
     Callers check who is asking (the router checks the admin owns the quiz), so
     Dev 3 can also call this from a timer.
     """
+    locked_game = (
+        db.query(Game)
+        .filter(Game.id == game.id)
+        .populate_existing()
+        .with_for_update()
+        .one_or_none()
+    )
+    if locked_game is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Game not found.")
+    game = locked_game
     question = _question_in_game(db, game, question_id)
     if _is_scored(db, game.id, question.id):
         return _result(db, game.id, question, already_scored=True)

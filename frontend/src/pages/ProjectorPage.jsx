@@ -3,15 +3,17 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
 import { QuizWebSocket } from "../services/websocket";
-import { API_BASE_URL } from "../services/api";
+import { API_BASE_URL, hostApi, stageApi } from "../services/api";
 
 function ProjectorPage() {
   const [searchParams] = useSearchParams();
 
   const gameId = searchParams.get("gameId");
   const token = searchParams.get("token");
+  const stageTokenRef = useRef(token);
 
   const [status, setStatus] = useState("lobby");
+  const [gamePin, setGamePin] = useState("");
   const [players, setPlayers] = useState([]);
   const [currentQuestion, setCurrentQuestion] = useState(null);
   const [questionNumber, setQuestionNumber] = useState(1);
@@ -122,6 +124,7 @@ function ProjectorPage() {
     }[gameStatus] || "lobby";
 
     setStatus(normalizedStatus);
+    setGamePin(String(data.pin || ""));
 
     setPlayers(
       Array.isArray(data.players) ? data.players : []
@@ -147,8 +150,8 @@ function ProjectorPage() {
         : null
     );
 
-    // Do not display a leaderboard before the game is finished.
-    if (normalizedStatus === "finished") {
+    // Show the standings after each reveal and again at the end of the game.
+    if (normalizedStatus === "reveal" || normalizedStatus === "finished") {
       setLeaderboard(
         data.leaderboard?.top ||
         data.leaderboard ||
@@ -182,6 +185,33 @@ function ProjectorPage() {
       return;
     }
 
+    stageTokenRef.current = token;
+
+    const refreshStageToken = async () => {
+      let refreshed;
+      try {
+        refreshed = await stageApi.refreshToken(gameId, stageTokenRef.current);
+      } catch (refreshError) {
+        // If the stage token has expired, the host's admin session can mint a
+        // replacement when the projector shares that browser profile.
+        try {
+          refreshed = await hostApi.getStageToken(gameId);
+        } catch (hostRefreshError) {
+          console.warn("Could not refresh stage token; reconnect will retry:", hostRefreshError || refreshError);
+          return;
+        }
+      }
+
+      stageTokenRef.current = refreshed.stage_token;
+      wsRef.current?.setToken(refreshed.stage_token);
+
+      // Keep a browser refresh pointed at the renewed token without reloading
+      // the page or exposing the token in application logs.
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set("token", refreshed.stage_token);
+      window.history.replaceState(window.history.state, "", nextUrl.toString());
+    };
+
     const ws = new QuizWebSocket({
       role: "stage",
       gameId,
@@ -198,8 +228,8 @@ function ProjectorPage() {
         setConnected(false);
       },
 
-      onClose: () => {
-        console.warn("Stage WebSocket disconnected.");
+      onClose: (event) => {
+        console.warn(`Stage WebSocket closed (${event.code}); reconnecting.`);
         setConnected(false);
       },
 
@@ -271,8 +301,7 @@ function ProjectorPage() {
         }
 
         else if (event === "LEADERBOARD_UPDATED") {
-          // Do not show intermediate leaderboard updates.
-          // The leaderboard is displayed only after GAME_FINISHED.
+          setLeaderboard(data.top || []);
         }
 
         else if (event === "GAME_FINISHED") {
@@ -294,8 +323,34 @@ function ProjectorPage() {
 
     wsRef.current = ws;
     ws.connect();
+    // Refresh alongside the first handshake, so a stale token is replaced for
+    // the automatic retry without delaying the projector connection.
+    refreshStageToken();
+
+    // Fetch a snapshot on page load as a fallback, and refresh it when a
+    // sleeping projector tab becomes visible again.
+    const refreshSnapshot = () => {
+      if (document.visibilityState !== "visible") return;
+      refreshStageToken();
+      stageApi.getGameState(gameId, stageTokenRef.current)
+        .then((snapshot) => restoreStageState(snapshot))
+        .catch((snapshotError) => {
+          console.warn("Could not refresh projector state:", snapshotError);
+        });
+    };
+    refreshSnapshot();
+    document.addEventListener("visibilitychange", refreshSnapshot);
+    const tokenRefreshTimer = setInterval(refreshStageToken, 6 * 60 * 60 * 1000);
+
+    // Keep the projector current even during a temporary WebSocket outage.
+    const snapshotTimer = setInterval(() => {
+      if (wsRef.current?.ws?.readyState !== WebSocket.OPEN) refreshSnapshot();
+    }, 30000);
 
     return () => {
+      document.removeEventListener("visibilitychange", refreshSnapshot);
+      clearInterval(snapshotTimer);
+      clearInterval(tokenRefreshTimer);
       stopTimer();
       setConnected(false);
 
@@ -316,7 +371,7 @@ function ProjectorPage() {
   ]);
 
   // Automatically use the domain currently hosting this page.
-  const joinUrl = `${window.location.origin}/`;
+  const joinUrl = `${window.location.origin}/${gamePin ? `?pin=${encodeURIComponent(gamePin)}` : ""}`;
 
   const isActive = status === "active";
   const isPaused = status === "paused";
@@ -423,6 +478,17 @@ function ProjectorPage() {
                 <p className="mt-5 text-sm font-bold tracking-widest text-[#91F0DF]">
                   SCAN TO JOIN
                 </p>
+
+                <div className="mt-5 text-center">
+                  <p className="text-xs font-bold tracking-[0.2em] text-purple-200">
+                    GAME PIN
+                  </p>
+                  <p className="brand-font mt-1 text-4xl font-black tracking-[0.18em] text-white">
+                    {gamePin
+                      ? `${gamePin.slice(0, 4)} ${gamePin.slice(4)}`
+                      : "--------"}
+                  </p>
+                </div>
               </div>
 
               {/* PLAYER COUNT */}
@@ -684,8 +750,8 @@ function ProjectorPage() {
           </section>
         )}
 
-        {/* FINAL LEADERBOARD */}
-        {isFinished && (
+        {/* PER-QUESTION AND FINAL LEADERBOARD */}
+        {(isReveal || isFinished) && (
           <section className="mx-auto w-full max-w-4xl text-center">
             <div className="mb-8">
               <span className="text-7xl">🏆</span>
@@ -702,7 +768,7 @@ function ProjectorPage() {
             <div className="rounded-3xl border border-white/15 bg-[#260638]/85 p-5 shadow-2xl sm:p-9">
               <div className="mb-7">
                 <p className="text-xs font-bold tracking-[0.25em] text-[#91F0DF]">
-                  FINAL STANDINGS
+                  {isFinished ? "FINAL STANDINGS" : "QUESTION STANDINGS"}
                 </p>
 
                 <h3 className="brand-font mt-2 text-3xl font-bold">
@@ -717,7 +783,7 @@ function ProjectorPage() {
                   </p>
 
                   <p className="mt-2 text-sm text-purple-200/60">
-                    The final leaderboard is currently empty.
+                      The leaderboard is currently empty.
                   </p>
                 </div>
               ) : (

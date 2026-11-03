@@ -13,7 +13,7 @@ Endpoints:
   GET  /api/v1/games/{gameId}/stage-token     admin: generate secure stage display token
 """
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -21,7 +21,7 @@ from app.database import get_db
 from app.dependencies import require_admin
 from app.game_schemas import GameOut, ScoreQuestionOut
 from app.models import Admin
-from app.services.game_orchestrator import create_stage_token, orchestrator
+from app.services.game_orchestrator import create_stage_token, orchestrator, verify_stage_token
 from app.websocket_schemas import StageTokenOut
 
 router = APIRouter(
@@ -51,6 +51,51 @@ def get_stage_token(
     get_game_for_admin(db, gameId, admin)
     token = create_stage_token(gameId)
     return StageTokenOut(game_id=gameId, stage_token=token)
+
+
+@router.get(
+    "/{gameId}/state",
+    summary="Get Current Host Game State",
+    description="Restore host controls and player list after refresh or reconnection.",
+)
+def get_host_game_state(
+    gameId: int,
+    admin: Admin = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.participant_service import get_game_for_admin
+    get_game_for_admin(db, gameId, admin)
+    return orchestrator.game_state_snapshot(db, gameId)
+
+
+@router.get(
+    "/{gameId}/stage-state",
+    summary="Get Current Stage State",
+    description="Return the sanitized projector snapshot for a valid stage token.",
+)
+def get_stage_game_state(
+    gameId: int,
+    token: str = Query(..., description="Stage token returned by the host stage-token endpoint."),
+    db: Session = Depends(get_db),
+) -> dict:
+    if not verify_stage_token(token, gameId):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired stage token.")
+    return orchestrator.game_state_snapshot(db, gameId)
+
+
+@router.post(
+    "/{gameId}/stage-token/refresh",
+    response_model=StageTokenOut,
+    summary="Refresh Stage Display Token",
+    description="Rotate a still-valid stage token so a long-running projector can reconnect later.",
+)
+def refresh_stage_token(
+    gameId: int,
+    token: str = Query(..., description="Current stage token."),
+) -> StageTokenOut:
+    if not verify_stage_token(token, gameId):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired stage token.")
+    return StageTokenOut(game_id=gameId, stage_token=create_stage_token(gameId))
 
 
 @router.post(

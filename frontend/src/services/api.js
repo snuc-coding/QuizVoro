@@ -294,6 +294,10 @@ export const hostApi = {
     return apiRequest(`/api/v1/games/${gameId}/stage-token`);
   },
 
+  async getGameState(gameId) {
+    return apiRequest(`/api/v1/games/${gameId}/state`);
+  },
+
   async startGame(gameId) {
     return apiRequest(`/api/v1/games/${gameId}/start`, {
       method: "POST",
@@ -341,6 +345,22 @@ export const hostApi = {
       method: "POST",
       body: JSON.stringify({ participant_id: Number(participantId) }),
     });
+  },
+};
+
+export const stageApi = {
+  async getGameState(gameId, token) {
+    return apiRequest(
+      `/api/v1/games/${gameId}/stage-state?token=${encodeURIComponent(token)}`,
+      { skipAuth: true }
+    );
+  },
+
+  async refreshToken(gameId, token) {
+    return apiRequest(
+      `/api/v1/games/${gameId}/stage-token/refresh?token=${encodeURIComponent(token)}`,
+      { method: "POST", skipAuth: true }
+    );
   },
 };
 

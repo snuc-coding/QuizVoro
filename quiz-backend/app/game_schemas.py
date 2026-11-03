@@ -66,6 +66,8 @@ class CurrentQuestionOut(BaseModel):
     deadline: datetime
     server_time: datetime
     already_answered: bool
+    is_revealed: bool = False
+    revealed_data: dict | None = None
 
 
 # ── Answers (participant) ────────────────────────────────────────────────────

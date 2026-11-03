@@ -30,6 +30,7 @@ class EventType(str, Enum):
     PLAYER_JOINED = "PLAYER_JOINED"
     PLAYER_LEFT = "PLAYER_LEFT"
     PLAYER_KICKED = "PLAYER_KICKED"
+    STAGE_STATE = "STAGE_STATE"
 
     # Game Lifecycle
     GET_READY = "GET_READY"
