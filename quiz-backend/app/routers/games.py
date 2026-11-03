@@ -15,7 +15,7 @@ Endpoints:
 Player endpoints take the X-Participant-Token header returned by join/rejoin.
 """
 
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -26,6 +26,7 @@ from app.game_schemas import (
 )
 from app.models import Admin, GameParticipant
 from app.services import answer_service, leaderboard_service, participant_service
+from app.services.game_orchestrator import orchestrator
 
 router = APIRouter(
     prefix="/games",
@@ -156,11 +157,19 @@ def get_current_question(
 def submit_answer(
     gameId: int,
     answer_in: AnswerIn,
+    background_tasks: BackgroundTasks,
     player: GameParticipant = Depends(current_player),
     db: Session = Depends(get_db),
 ) -> AnswerAck:
     """POST /api/v1/games/{gameId}/answers"""
-    return answer_service.submit_answer(db, gameId, player, answer_in)
+    ack = answer_service.submit_answer(db, gameId, player, answer_in)
+    # Keep the host's "answered" and the projector's "responses" counters live.
+    background_tasks.add_task(_announce_answer_count, gameId, ack.question_id)
+    return ack
+
+
+async def _announce_answer_count(game_id: int, question_id: int) -> None:
+    orchestrator.request_answer_count(game_id, question_id)
 
 
 @router.post(

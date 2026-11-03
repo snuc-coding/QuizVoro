@@ -101,7 +101,9 @@ def current_question(db: Session, game_id: int, player: GameParticipant) -> Curr
     opened_at = scoring.as_utc(game.current_question_started_at)
     question_ids = _quiz_question_ids(db, game.quiz_id)
     revealed = _is_scored(db, game.id, question.id)
-    revealed_data = score_question(db, game, question.id).model_dump(mode="json") if revealed else None
+    # Read-only: a refreshed phone must never take the game lock (that is what
+    # froze the server when many phones refreshed around a reveal).
+    revealed_data = _result(db, game.id, question, already_scored=True).model_dump(mode="json") if revealed else None
     return CurrentQuestionOut(
         question=participant_question(question),
         question_number=question_ids.index(question.id) + 1,
@@ -138,14 +140,25 @@ def submit_answer(db: Session, game_id: int, player: GameParticipant, answer_in:
     never says. Late, duplicate and out-of-turn answers are rejected.
     """
     game = get_player_game(db, game_id, player)
-    # Serialize answer acceptance with reveal/scoring and question transitions.
-    # Otherwise an answer can pass the "not scored" check just as reveal scores
-    # the question, then commit too late to be included in the result.
+    # A SHARED lock on the game row: answers run side by side, but the reveal
+    # and question changes (which take FOR UPDATE) wait for answers in flight,
+    # and answers wait for them. So an answer can't slip in just as the question
+    # is scored. The lock is always released before this function returns (on
+    # success, on rejection, on error), never left for request cleanup: a lock
+    # waiting on cleanup is what froze the server under load.
+    try:
+        return _submit_locked(db, game_id, player, answer_in)
+    except BaseException:
+        db.rollback()
+        raise
+
+
+def _submit_locked(db: Session, game_id: int, player: GameParticipant, answer_in: AnswerIn) -> AnswerAck:
     game = (
         db.query(Game)
         .filter(Game.id == game_id)
         .populate_existing()
-        .with_for_update()
+        .with_for_update(read=True)
         .one()
     )
     _require_active(game)
@@ -168,11 +181,12 @@ def submit_answer(db: Session, game_id: int, player: GameParticipant, answer_in:
     if scoring.is_late(time_ms, question.time_limit):
         raise _conflict("Time's up. Your answer arrived after the timer ended.")
 
+    question_id, option_id = question.id, option.id
     db.add(Answer(
         game_id=game.id,
         game_participant_id=player.id,
-        question_id=question.id,
-        chosen_option_id=option.id,
+        question_id=question_id,
+        chosen_option_id=option_id,
         response_time_ms=time_ms,
         answered_at=now,
     ))
@@ -181,7 +195,7 @@ def submit_answer(db: Session, game_id: int, player: GameParticipant, answer_in:
     except IntegrityError:  # a double tap: the first request already saved an answer
         db.rollback()
         raise _conflict("You already answered this question.") from None
-    return AnswerAck(question_id=question.id, option_id=option.id, response_time_ms=time_ms)
+    return AnswerAck(question_id=question_id, option_id=option_id, response_time_ms=time_ms)
 
 
 # ── Scoring (the reveal) ─────────────────────────────────────────────────────
@@ -260,29 +274,39 @@ def score_question(db: Session, game: Game, question_id: int) -> ScoreQuestionOu
     Callers check who is asking (the router checks the admin owns the quiz), so
     Dev 3 can also call this from a timer.
     """
-    locked_game = (
-        db.query(Game)
-        .filter(Game.id == game.id)
-        .populate_existing()
-        .with_for_update()
-        .one_or_none()
-    )
-    if locked_game is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Game not found.")
-    game = locked_game
-    question = _question_in_game(db, game, question_id)
-    if _is_scored(db, game.id, question.id):
-        return _result(db, game.id, question, already_scored=True)
-    if question.id != game.current_question_id or game.current_question_started_at is None:
-        raise _conflict("Only the open question can be scored.")
-
-    db.add(ScoredQuestion(game_id=game.id, question_id=question.id))
+    # FOR UPDATE waits for answers in flight (they hold FOR SHARE) and makes new
+    # ones wait until scoring is committed. Every path below ends the
+    # transaction here, so the lock is never left held after this returns.
+    game_id = game.id
     try:
-        db.flush()
-    except IntegrityError:  # another reveal scored it a moment earlier
-        db.rollback()
-        return _result(db, game.id, question, already_scored=True)
+        locked_game = (
+            db.query(Game)
+            .filter(Game.id == game_id)
+            .populate_existing()
+            .with_for_update()
+            .one_or_none()
+        )
+        if locked_game is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Game not found.")
+        game = locked_game
+        question = _question_in_game(db, game, question_id)
+        if _is_scored(db, game_id, question.id):
+            result = _result(db, game_id, question, already_scored=True)
+            db.rollback()
+            return result
+        if question.id != game.current_question_id or game.current_question_started_at is None:
+            raise _conflict("Only the open question can be scored.")
 
-    _award_points(db, game, question)
-    db.commit()
-    return _result(db, game.id, question, already_scored=False)
+        db.add(ScoredQuestion(game_id=game_id, question_id=question.id))
+        try:
+            db.flush()
+        except IntegrityError:  # another reveal scored it a moment earlier
+            db.rollback()
+            return _result(db, game_id, question, already_scored=True)
+
+        _award_points(db, game, question)
+        db.commit()
+    except BaseException:
+        db.rollback()
+        raise
+    return _result(db, game_id, question, already_scored=False)

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -52,11 +53,31 @@ _game_locks: dict[int, asyncio.Lock] = {}
 _paused_times: dict[int, datetime] = {}
 _deadline_tasks: dict[int, asyncio.Task] = {}
 
+# Pending "how many have answered" updates for answers sent over HTTP (one per game at a time).
+_count_tasks: dict[int, asyncio.Task] = {}
+ANSWER_COUNT_DELAY_S = 0.3
+
 
 def _get_game_lock(game_id: int) -> asyncio.Lock:
     if game_id not in _game_locks:
         _game_locks[game_id] = asyncio.Lock()
     return _game_locks[game_id]
+
+
+@asynccontextmanager
+async def _host_action(db: Session, game_id: int):
+    """
+    One host action at a time per game. If the action fails after locking the
+    game row (FOR UPDATE), roll back right here so the row lock is released
+    before the next action or any answer needs it, instead of waiting for the
+    request's session cleanup.
+    """
+    async with _get_game_lock(game_id):
+        try:
+            yield
+        except BaseException:
+            db.rollback()
+            raise
 
 
 def _now() -> datetime:
@@ -274,6 +295,29 @@ class GameOrchestrator:
         await manager.broadcast_to_role(game_id, "stage", msg)
 
     @classmethod
+    def request_answer_count(cls, game_id: int, question_id: int) -> None:
+        """
+        Tell host and stage the new answer count soon, for answers sent over HTTP
+        (the phones' POST /answers). A burst of answers becomes one update every
+        ANSWER_COUNT_DELAY_S instead of one per answer. Call on the event loop.
+        """
+        task = _count_tasks.get(game_id)
+        if task is not None and not task.done():
+            return
+        _count_tasks[game_id] = asyncio.create_task(cls._send_answer_count_soon(game_id, question_id))
+
+    @classmethod
+    async def _send_answer_count_soon(cls, game_id: int, question_id: int) -> None:
+        try:
+            await asyncio.sleep(ANSWER_COUNT_DELAY_S)
+            with SessionLocal() as db:
+                await cls.broadcast_answer_count(db, game_id, question_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Answer count update failed for game %s", game_id)
+
+    @classmethod
     async def broadcast_answer_count(cls, db: Session, game_id: int, question_id: int):
         from app.models import Answer
         active_count = len(participant_service.active_players(db, game_id))
@@ -296,7 +340,7 @@ class GameOrchestrator:
     @classmethod
     async def start_game(cls, db: Session, game_id: int, admin: Admin) -> Game:
         """Start the live quiz: transition from lobby to active with Question 1."""
-        async with _get_game_lock(game_id):
+        async with _host_action(db, game_id):
             game = _lock_game_for_admin(db, game_id, admin)
             if game.status != "lobby":
                 raise HTTPException(
@@ -345,7 +389,7 @@ class GameOrchestrator:
     @classmethod
     async def next_question(cls, db: Session, game_id: int, admin: Admin) -> Game:
         """Advance to the next question in sequence, or finish the game if at the end."""
-        async with _get_game_lock(game_id):
+        async with _host_action(db, game_id):
             game = _lock_game_for_admin(db, game_id, admin)
             if game.status not in ("active", "paused"):
                 raise HTTPException(
@@ -418,7 +462,7 @@ class GameOrchestrator:
     @classmethod
     async def pause_game(cls, db: Session, game_id: int, admin: Admin) -> Game:
         """Pause the game: halts question countdown and records pause timestamp."""
-        async with _get_game_lock(game_id):
+        async with _host_action(db, game_id):
             game = _lock_game_for_admin(db, game_id, admin)
             if game.status != "active":
                 raise HTTPException(
@@ -456,7 +500,7 @@ class GameOrchestrator:
     @classmethod
     async def resume_game(cls, db: Session, game_id: int, admin: Admin) -> Game:
         """Resume a paused game: shifts question start forward by paused duration."""
-        async with _get_game_lock(game_id):
+        async with _host_action(db, game_id):
             game = _lock_game_for_admin(db, game_id, admin)
             if game.status != "paused":
                 raise HTTPException(
@@ -504,7 +548,7 @@ class GameOrchestrator:
     @classmethod
     async def reveal_answer(cls, db: Session, game_id: int, admin: Admin) -> ScoreQuestionOut:
         """Score the question at reveal and broadcast results and updated leaderboard."""
-        async with _get_game_lock(game_id):
+        async with _host_action(db, game_id):
             game = _lock_game_for_admin(db, game_id, admin)
             if not game.current_question_id:
                 raise HTTPException(
@@ -536,8 +580,9 @@ class GameOrchestrator:
 
             # 2. Send personalized results to each participant
             players = participant_service.active_players(db, game_id)
+            all_stats = leaderboard_service.stats_for_all(db, game, players)  # one pass, not one per player
             for player in players:
-                stats = leaderboard_service.my_stats(db, game_id, player)
+                stats = all_stats[player.id]
                 personal_payload = PlayerPersonalResultPayload(
                     participant_id=player.id,
                     nickname=player.participant.nickname,
@@ -570,7 +615,7 @@ class GameOrchestrator:
     @classmethod
     async def end_game(cls, db: Session, game_id: int, admin: Admin) -> Game:
         """End the game session manually."""
-        async with _get_game_lock(game_id):
+        async with _host_action(db, game_id):
             game = _lock_game_for_admin(db, game_id, admin)
             cls._cancel_deadline(game_id)
             game.status = "finished"
@@ -590,7 +635,7 @@ class GameOrchestrator:
         cls, db: Session, game_id: int, participant_id: int, admin: Admin
     ) -> None:
         """Kick an active player: deactivates in DB and disconnects their sockets."""
-        async with _get_game_lock(game_id):
+        async with _host_action(db, game_id):
             game = _lock_game_for_admin(db, game_id, admin)
             membership = (
                 db.query(GameParticipant)

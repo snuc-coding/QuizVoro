@@ -246,6 +246,9 @@ class TestStageWebSocket:
         stage_token = client.get(f"{API}/games/{game['id']}/stage-token", headers=auth_headers).json()["stage_token"]
 
         with client.websocket_connect(f"{API}/ws/games/{game['id']}/stage?token={stage_token}") as ws:
+            # The stage first gets a snapshot of the game, so a refreshed projector can redraw
+            assert ws.receive_json()["event"] == "STAGE_STATE"
+
             # Ping
             ws.send_json({"event": "PING"})
             reply = ws.receive_json()
@@ -301,6 +304,7 @@ class TestGameLifecycleAndBroadcasts:
             assert h_join["event"] == "PLAYER_JOINED"
             assert h_join["data"]["nickname"] == "Alice"
 
+            assert ws_stage.receive_json()["event"] == "STAGE_STATE"  # snapshot sent on connect
             s_join = ws_stage.receive_json()
             assert s_join["event"] == "PLAYER_JOINED"
             assert s_join["data"]["nickname"] == "Alice"
@@ -364,7 +368,12 @@ class TestGameLifecycleAndBroadcasts:
             assert q2_msg["event"] == "QUESTION_STARTED"
             assert q2_msg["data"]["question_number"] == 2
 
-            # 5. Host finishes game
+            # 5. Question 2 must be revealed before the host can move on (3 Nov rule)
+            ws_host.send_json({"action": "REVEAL"})
+            assert ws_p1.receive_json()["event"] == "ANSWER_REVEALED"
+            assert ws_p1.receive_json()["event"] == "LEADERBOARD_UPDATED"
+
+            # 6. Host finishes game
             ws_host.send_json({"action": "NEXT_QUESTION"})
             fin_msg = ws_p1.receive_json()
             assert fin_msg["event"] == "GAME_FINISHED"

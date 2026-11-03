@@ -3,6 +3,7 @@ leaderboard_service.py — Standings for the stage screen, host and players (Dev
 
   get_leaderboard   overall top N, or one round's standings (round_id)
   my_stats          a player's own score, rank, streak and last result
+  stats_for_all     the same for every active player at once (used at the reveal)
 
 Only scored questions count, so nothing here can reveal the open question's answer.
 Removed players are left out. rank_delta is the move at the latest scoring.
@@ -135,28 +136,16 @@ def get_leaderboard(db: Session, game: Game, limit: int = 10, round_id: int | No
     return _build(game, None, players, standings, moves, len(_scored_question_ids(db, game.id)), limit)
 
 
-def my_stats(db: Session, game_id: int, player: GameParticipant) -> MyStatsOut:
-    """The player's own numbers, and how they did on the latest scored question."""
-    game = get_player_game(db, game_id, player)
-    scored_ids = _scored_question_ids(db, game.id)
-
-    rank = None
+def _stats(player: GameParticipant, rank: int | None, latest: int | None, answer: Answer | None) -> MyStatsOut:
+    """One player's numbers. latest is the most recently scored question (None before any)."""
     last_result = None
-    if scored_ids:
-        rank = scoring.rank([standing(p) for p in active_players(db, game.id)])[player.id]
-        latest = scored_ids[-1]
-        answer = (
-            db.query(Answer)
-            .filter(Answer.game_id == game.id, Answer.game_participant_id == player.id, Answer.question_id == latest)
-            .first()
-        )
+    if latest is not None:
         last_result = LastResult(
             question_id=latest,
             answered=answer is not None,
             is_correct=bool(answer is not None and answer.is_correct),
             points=(answer.points_awarded or 0) if answer is not None else 0,
         )
-
     return MyStatsOut(
         participant_id=player.id,
         nickname=player.participant.nickname,
@@ -168,3 +157,41 @@ def my_stats(db: Session, game_id: int, player: GameParticipant) -> MyStatsOut:
         correct_count=player.correct_count,
         last_result=last_result,
     )
+
+
+def my_stats(db: Session, game_id: int, player: GameParticipant) -> MyStatsOut:
+    """The player's own numbers, and how they did on the latest scored question."""
+    game = get_player_game(db, game_id, player)
+    scored_ids = _scored_question_ids(db, game.id)
+    if not scored_ids:
+        return _stats(player, None, None, None)
+
+    rank = scoring.rank([standing(p) for p in active_players(db, game.id)])[player.id]
+    latest = scored_ids[-1]
+    answer = (
+        db.query(Answer)
+        .filter(Answer.game_id == game.id, Answer.game_participant_id == player.id, Answer.question_id == latest)
+        .first()
+    )
+    return _stats(player, rank, latest, answer)
+
+
+def stats_for_all(db: Session, game: Game, players: list[GameParticipant]) -> dict[int, MyStatsOut]:
+    """
+    my_stats for every given player in a few queries instead of a few per player.
+
+    The reveal sends each phone its own result; doing my_stats once per player
+    re-ranked the whole room for every player, which took seconds with a few
+    hundred players and held up everything else on the server meanwhile.
+    """
+    scored_ids = _scored_question_ids(db, game.id)
+    if not scored_ids:
+        return {p.id: _stats(p, None, None, None) for p in players}
+
+    ranks = scoring.rank([standing(p) for p in players])
+    latest = scored_ids[-1]
+    answers = {
+        a.game_participant_id: a
+        for a in db.query(Answer).filter(Answer.game_id == game.id, Answer.question_id == latest)
+    }
+    return {p.id: _stats(p, ranks[p.id], latest, answers.get(p.id)) for p in players}

@@ -752,18 +752,21 @@ function ProjectorPage() {
 
         {/* PER-QUESTION AND FINAL LEADERBOARD */}
         {(isReveal || isFinished) && (
-          <section className="mx-auto w-full max-w-4xl text-center">
-            <div className="mb-8">
-              <span className="text-7xl">🏆</span>
+          <section className={`mx-auto w-full max-w-4xl text-center ${isFinished ? "" : "mt-8"}`}>
+            {/* Only at the very end: between questions this used to say "Quiz Complete!" */}
+            {isFinished && (
+              <div className="mb-8">
+                <span className="text-7xl">🏆</span>
 
-              <h2 className="brand-font mt-4 text-4xl font-black text-[#91F0DF] sm:text-6xl">
-                Quiz Complete!
-              </h2>
+                <h2 className="brand-font mt-4 text-4xl font-black text-[#91F0DF] sm:text-6xl">
+                  Quiz Complete!
+                </h2>
 
-              <p className="mt-3 text-lg text-purple-100/70">
-                Congratulations to all our participants.
-              </p>
-            </div>
+                <p className="mt-3 text-lg text-purple-100/70">
+                  Congratulations to all our participants.
+                </p>
+              </div>
+            )}
 
             <div className="rounded-3xl border border-white/15 bg-[#260638]/85 p-5 shadow-2xl sm:p-9">
               <div className="mb-7">
@@ -837,9 +840,11 @@ function ProjectorPage() {
                 </div>
               )}
 
-              <p className="mt-8 text-sm font-semibold tracking-widest text-[#91F0DF]">
-                THANK YOU FOR PLAYING ASTERIS!
-              </p>
+              {isFinished && (
+                <p className="mt-8 text-sm font-semibold tracking-widest text-[#91F0DF]">
+                  THANK YOU FOR PLAYING ASTERIS!
+                </p>
+              )}
             </div>
           </section>
         )}
