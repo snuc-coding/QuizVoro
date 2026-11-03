@@ -117,24 +117,14 @@ def join_game(db: Session, pin: str, raw_nickname: str | None = None, is_anonymo
         idx += 1
         candidate_name = f"Anonymous_{idx:02d}"
 
-    # Check whether anonymous mode is requested (or needed because nickname is omitted)
-    should_be_anonymous = is_anonymous is True or not (raw_nickname and raw_nickname.strip())
-
-    if should_be_anonymous:
-        # If player gave a nickname but requested anonymity, record it internally
-        if raw_nickname and raw_nickname.strip():
-            try:
-                internal_nickname = check_nickname(raw_nickname)
-            except NicknameRejected:
-                internal_nickname = candidate_name
-        else:
-            internal_nickname = candidate_name
-
+    # If is_anonymous is explicitly True or raw_nickname is omitted (None)
+    if is_anonymous is True or raw_nickname is None:
         display_name = candidate_name
         key = nickname_key(candidate_name)
-        participant = Participant(nickname=internal_nickname)
+        participant = Participant(nickname=candidate_name)
         is_anon_flag = True
     else:
+        # Caller provided a nickname (empty or not) without is_anonymous=True; validate strictly
         try:
             clean_nick = check_nickname(raw_nickname)
         except NicknameRejected as exc:
