@@ -37,6 +37,8 @@ class Settings(BaseSettings):
 
     # ── Miscellaneous ─────────────────────────────────────────────────────────
     ENVIRONMENT: str = "production"
+    # Log every SQL statement. Debugging only: it slows a full game to a crawl.
+    SQL_ECHO: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",          # look for .env in the current working directory

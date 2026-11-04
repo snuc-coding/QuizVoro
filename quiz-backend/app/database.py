@@ -72,18 +72,24 @@ ORM: SQLAlchemy 2.x declarative style.
 """
 import os
 from contextlib import contextmanager
-from typing import Generator
+from typing import Any, Callable, Generator, TypeVar
 
-from sqlalchemy import create_engine, event
+from fastapi.concurrency import run_in_threadpool
+from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 from app.config import get_settings
 
 settings = get_settings()
 
-# Keep pool_size + max_overflow below Postgres max_connections (default 100).
-POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
-MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "30"))
+# Every database call runs in a worker thread (see run_db), and each thread
+# holds at most one connection. With at least as many connections as worker
+# threads, a thread never waits for a connection, so the two pools cannot
+# starve each other. Keep POOL_SIZE + MAX_OVERFLOW below Postgres
+# max_connections (default 100), leaving room for migrations and psql.
+THREADPOOL_SIZE = int(os.getenv("THREADPOOL_SIZE", "60"))
+POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "40"))
+MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "40"))
 POOL_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "10"))
 
 # ── Engine ────────────────────────────────────────────────────────────────────
@@ -94,13 +100,9 @@ engine = create_engine(
     max_overflow=MAX_OVERFLOW,
     pool_timeout=POOL_TIMEOUT,  # fail fast instead of hanging 30s
     pool_recycle=1800,
-    echo=(settings.ENVIRONMENT == "development"),
+    # Logging every statement is far too slow for a live game; opt in with SQL_ECHO.
+    echo=settings.SQL_ECHO,
 )
-
-
-@event.listens_for(engine, "checkout")
-def _log_checkout(dbapi_conn, rec, proxy):
-    print("POOL:", engine.pool.status())
 
 # ── Session factory ───────────────────────────────────────────────────────────
 SessionLocal = sessionmaker(
@@ -121,6 +123,33 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+T = TypeVar("T")
+
+
+async def run_db(fn: Callable[..., T], *args: Any, db: Session | None = None) -> T:
+    """
+    Run fn(db, *args) in a worker thread, never on the event loop.
+
+    A blocking query on the loop freezes every socket on the server while it
+    waits, so async code must reach the database only through this.
+
+    With db=None the call gets its own short-lived session. With a request's
+    session (from get_db), its transaction is ended in the same thread, so the
+    connection goes back to the pool before the request waits on anything else.
+    Either way fn must return plain values or Pydantic models, not ORM objects:
+    they are expired by then and would lazy-load on the loop.
+    """
+    def _inner() -> T:
+        if db is None:
+            with SessionLocal() as own_db:
+                return fn(own_db, *args)
+        try:
+            return fn(db, *args)
+        finally:
+            db.rollback()  # after a commit this just ends the read transaction
+    return await run_in_threadpool(_inner)
 
 
 @contextmanager

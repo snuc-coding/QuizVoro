@@ -132,12 +132,22 @@ def _chosen_option(db: Session, question: Question, answer_in: AnswerIn) -> Opti
     return option
 
 
-def submit_answer(db: Session, game_id: int, player: GameParticipant, answer_in: AnswerIn) -> AnswerAck:
+def submit_answer(
+    db: Session,
+    game_id: int,
+    player: GameParticipant,
+    answer_in: AnswerIn,
+    received_at: datetime | None = None,
+) -> AnswerAck:
     """
     Lock in the player's answer to the open question.
 
     Whether it is correct is decided when the question is scored, and the reply
     never says. Late, duplicate and out-of-turn answers are rejected.
+
+    received_at is when the server received the answer (default: now). Callers
+    pass it so time spent queued behind other answers never costs the player
+    points or turns an on-time answer into a late one.
     """
     game = get_player_game(db, game_id, player)
     # A SHARED lock on the game row: answers run side by side, but the reveal
@@ -147,13 +157,15 @@ def submit_answer(db: Session, game_id: int, player: GameParticipant, answer_in:
     # success, on rejection, on error), never left for request cleanup: a lock
     # waiting on cleanup is what froze the server under load.
     try:
-        return _submit_locked(db, game_id, player, answer_in)
+        return _submit_locked(db, game_id, player, answer_in, received_at or _now())
     except BaseException:
         db.rollback()
         raise
 
 
-def _submit_locked(db: Session, game_id: int, player: GameParticipant, answer_in: AnswerIn) -> AnswerAck:
+def _submit_locked(
+    db: Session, game_id: int, player: GameParticipant, answer_in: AnswerIn, now: datetime
+) -> AnswerAck:
     game = (
         db.query(Game)
         .filter(Game.id == game_id)
@@ -165,7 +177,6 @@ def _submit_locked(db: Session, game_id: int, player: GameParticipant, answer_in
     if answer_in.question_id != game.current_question_id:
         raise _conflict("That question is not open.")
 
-    now = _now()
     opened_at = game.current_question_started_at
     if opened_at is None or now < scoring.as_utc(opened_at):
         raise _conflict("Answers haven't opened yet.")

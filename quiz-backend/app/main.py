@@ -12,22 +12,44 @@ To run:
     uvicorn app.main:app --reload
 """
 
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
+
+import anyio.to_thread
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
+from app.database import MAX_OVERFLOW, POOL_SIZE, THREADPOOL_SIZE
 from app.routers import auth, quizzes, rounds, questions, games, game_controls, websocket
 
 settings = get_settings()
+logger = logging.getLogger("quizvoro")
 
 # Ensure media directory exists before mounting
 media_path = Path(settings.MEDIA_DIR).resolve()
 media_path.mkdir(parents=True, exist_ok=True)
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Worker threads run every database call. The default (40) is too few for a
+    # full room answering at once; see database.py for how it relates to the pool.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = THREADPOOL_SIZE
+    if POOL_SIZE + MAX_OVERFLOW < THREADPOOL_SIZE:
+        logger.warning(
+            "DB pool (%d) is smaller than THREADPOOL_SIZE (%d): worker threads "
+            "may wait for connections under load.",
+            POOL_SIZE + MAX_OVERFLOW, THREADPOOL_SIZE,
+        )
+    yield
+
+
 # ── App instance ──────────────────────────────────────────────────────────────
 app = FastAPI(
+    lifespan=lifespan,
     title="QuizVoro — Live Quiz API",
     description=(
         "Backend API for QuizVoro — the live multiplayer quiz platform.\n\n"

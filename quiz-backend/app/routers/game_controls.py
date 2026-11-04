@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, run_db
 from app.dependencies import require_admin
 from app.game_schemas import GameOut, ScoreQuestionOut
 from app.models import Admin
@@ -58,14 +58,17 @@ def get_stage_token(
     summary="Get Current Host Game State",
     description="Restore host controls and player list after refresh or reconnection.",
 )
-def get_host_game_state(
+async def get_host_game_state(
     gameId: int,
     admin: Admin = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict:
     from app.services.participant_service import get_game_for_admin
-    get_game_for_admin(db, gameId, admin)
-    return orchestrator.game_state_snapshot(db, gameId)
+
+    def snapshot(db: Session) -> dict:
+        get_game_for_admin(db, gameId, admin)
+        return orchestrator.game_state_snapshot(db, gameId)
+    return await run_db(snapshot, db=db)
 
 
 @router.get(
@@ -73,14 +76,14 @@ def get_host_game_state(
     summary="Get Current Stage State",
     description="Return the sanitized projector snapshot for a valid stage token.",
 )
-def get_stage_game_state(
+async def get_stage_game_state(
     gameId: int,
     token: str = Query(..., description="Stage token returned by the host stage-token endpoint."),
     db: Session = Depends(get_db),
 ) -> dict:
     if not verify_stage_token(token, gameId):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired stage token.")
-    return orchestrator.game_state_snapshot(db, gameId)
+    return await run_db(orchestrator.game_state_snapshot, gameId, db=db)
 
 
 @router.post(
@@ -194,5 +197,5 @@ async def kick_participant(
     admin: Admin = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict:
-    await orchestrator.kick_participant(db, gameId, kick_in.participant_id, admin)
+    await orchestrator.kick_participant(db, gameId, admin, kick_in.participant_id)
     return {"success": True, "message": f"Participant {kick_in.participant_id} was removed."}

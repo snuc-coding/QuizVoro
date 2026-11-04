@@ -27,6 +27,11 @@ from app.websocket_schemas import EventType, WebSocketMessage
 
 logger = logging.getLogger("quizvoro.realtime")
 
+# A phone that can't take a message in this long is treated as gone: it is
+# dropped from the room and reconnects to a fresh snapshot, instead of holding
+# up the rest of the broadcast.
+SEND_TIMEOUT_S = 5.0
+
 
 class GameRoom:
     """Holds active connections for a single game session."""
@@ -127,17 +132,50 @@ class ConnectionManager:
 
     @staticmethod
     async def _send_safe(websocket: WebSocket, message_dict: dict[str, Any]) -> bool:
-        """Safely send JSON message. Returns False if socket is broken."""
+        """Safely send JSON message. Returns False if socket is broken or too slow."""
         try:
-            await websocket.send_json(message_dict)
+            await asyncio.wait_for(websocket.send_json(message_dict), timeout=SEND_TIMEOUT_S)
             return True
+        except asyncio.TimeoutError:
+            logger.warning("WebSocket send timed out after %.1fs; dropping the socket", SEND_TIMEOUT_S)
+            asyncio.create_task(ConnectionManager._close_quietly(websocket))
+            return False
         except (WebSocketDisconnect, RuntimeError, Exception):
             return False
+
+    @staticmethod
+    async def _close_quietly(websocket: WebSocket) -> None:
+        try:
+            await websocket.close(code=1011, reason="Too slow to receive updates")
+        except Exception:
+            pass
 
     def _format_message(self, message: dict[str, Any] | WebSocketMessage) -> dict[str, Any]:
         if isinstance(message, WebSocketMessage):
             return message.to_json_dict()
         return message
+
+    @classmethod
+    async def _send_all(cls, sends: list[tuple[WebSocket, dict[str, Any]]]) -> list[bool]:
+        """Send every (socket, payload) at once; one slow phone doesn't delay the rest."""
+        if not sends:
+            return []
+        return list(await asyncio.gather(*(cls._send_safe(ws, payload) for ws, payload in sends)))
+
+    @staticmethod
+    def _participant_sockets(room: GameRoom) -> list[tuple[int, WebSocket]]:
+        return [(pid, ws) for pid, sockets in list(room.participants.items()) for ws in list(sockets)]
+
+    async def _drop_participant_sockets(
+        self, game_id: int, room: GameRoom, dead: list[tuple[int, WebSocket]]
+    ) -> None:
+        async with self._lock:
+            for pid, ws in dead:
+                if pid in room.participants:
+                    room.participants[pid].discard(ws)
+                    if not room.participants[pid]:
+                        room.participants.pop(pid, None)
+            self._cleanup_empty_room(game_id)
 
     async def broadcast_to_game(self, game_id: int, message: dict[str, Any] | WebSocketMessage) -> None:
         """Broadcast message to all connected hosts, participants, and stage displays."""
@@ -146,28 +184,18 @@ class ConnectionManager:
             return
 
         payload = self._format_message(message)
-        dead_hosts: set[WebSocket] = set()
-        dead_stages: set[WebSocket] = set()
-        dead_participants: list[tuple[int, WebSocket]] = []
+        hosts = list(room.hosts)
+        stages = list(room.stages)
+        participants = self._participant_sockets(room)
+        sockets = hosts + stages + [ws for _pid, ws in participants]
+        results = await self._send_all([(ws, payload) for ws in sockets])
 
-        # 1. Hosts
-        for ws in list(room.hosts):
-            success = await self._send_safe(ws, payload)
-            if not success:
-                dead_hosts.add(ws)
-
-        # 2. Stage displays
-        for ws in list(room.stages):
-            success = await self._send_safe(ws, payload)
-            if not success:
-                dead_stages.add(ws)
-
-        # 3. Participants
-        for pid, sockets in list(room.participants.items()):
-            for ws in list(sockets):
-                success = await self._send_safe(ws, payload)
-                if not success:
-                    dead_participants.append((pid, ws))
+        host_ok = results[:len(hosts)]
+        stage_ok = results[len(hosts):len(hosts) + len(stages)]
+        participant_ok = results[len(hosts) + len(stages):]
+        dead_hosts = {ws for ws, ok in zip(hosts, host_ok) if not ok}
+        dead_stages = {ws for ws, ok in zip(stages, stage_ok) if not ok}
+        dead_participants = [entry for entry, ok in zip(participants, participant_ok) if not ok]
 
         # Cleanup dead sockets
         if dead_hosts or dead_stages or dead_participants:
@@ -176,12 +204,7 @@ class ConnectionManager:
                     room.hosts.discard(ws)
                 for ws in dead_stages:
                     room.stages.discard(ws)
-                for pid, ws in dead_participants:
-                    if pid in room.participants:
-                        room.participants[pid].discard(ws)
-                        if not room.participants[pid]:
-                            room.participants.pop(pid, None)
-                self._cleanup_empty_room(game_id)
+            await self._drop_participant_sockets(game_id, room, dead_participants)
 
     async def broadcast_to_role(
         self, game_id: int, role: str, message: dict[str, Any] | WebSocketMessage
@@ -194,15 +217,14 @@ class ConnectionManager:
         payload = self._format_message(message)
 
         if role == "host":
-            for ws in list(room.hosts):
-                await self._send_safe(ws, payload)
+            sockets = list(room.hosts)
         elif role == "stage":
-            for ws in list(room.stages):
-                await self._send_safe(ws, payload)
+            sockets = list(room.stages)
         elif role == "participant":
-            for pid, sockets in list(room.participants.items()):
-                for ws in list(sockets):
-                    await self._send_safe(ws, payload)
+            sockets = [ws for _pid, ws in self._participant_sockets(room)]
+        else:
+            return
+        await self._send_all([(ws, payload) for ws in sockets])
 
     async def send_to_participant(
         self, game_id: int, participant_id: int, message: dict[str, Any] | WebSocketMessage
@@ -213,12 +235,26 @@ class ConnectionManager:
             return False
 
         payload = self._format_message(message)
-        sockets = list(room.participants[participant_id])
-        any_success = False
-        for ws in sockets:
-            if await self._send_safe(ws, payload):
-                any_success = True
-        return any_success
+        results = await self._send_all([(ws, payload) for ws in list(room.participants[participant_id])])
+        return any(results)
+
+    async def send_to_participants(
+        self, game_id: int, messages: dict[int, dict[str, Any] | WebSocketMessage]
+    ) -> None:
+        """Send each participant their own message (participant_id -> message), all at once."""
+        room = self._rooms.get(game_id)
+        if not room:
+            return
+
+        targets = [
+            (pid, ws, self._format_message(messages[pid]))
+            for pid, ws in self._participant_sockets(room)
+            if pid in messages
+        ]
+        results = await self._send_all([(ws, payload) for _pid, ws, payload in targets])
+        dead = [(pid, ws) for (pid, ws, _payload), ok in zip(targets, results) if not ok]
+        if dead:
+            await self._drop_participant_sockets(game_id, room, dead)
 
     async def kick_participant(
         self, game_id: int, participant_id: int, reason: str = "Removed by host"

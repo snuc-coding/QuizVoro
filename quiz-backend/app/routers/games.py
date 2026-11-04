@@ -15,10 +15,12 @@ Endpoints:
 Player endpoints take the X-Participant-Token header returned by join/rejoin.
 """
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query, status
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, run_db
 from app.dependencies import require_admin
 from app.game_schemas import (
     AnswerAck, AnswerIn, CurrentQuestionOut, GameCreate, GameOut, JoinOut, JoinRequest,
@@ -37,14 +39,20 @@ router = APIRouter(
 # venue shares one Wi-Fi or carrier IP, so a per-IP limit would lock out the whole
 # room at once. Duplicates are blocked instead, by unique constraints in the
 # database: one answer per player per question, one nickname per game.
+#
+# The player endpoints are what a full room hits at once, so each one does all
+# of its database work (token lookup included) in a single run_db call and
+# returns a Pydantic model. The connection is then back in the pool before the
+# request waits for anything else. A sync endpoint with a database dependency
+# holds its connection while it queues for a second worker thread, and with a
+# few hundred phones that starved the pool.
 
 
-def current_player(
+def player_token(
     x_participant_token: str | None = Header(None, description="Token returned by join or rejoin."),
-    db: Session = Depends(get_db),
-) -> GameParticipant:
-    """Dependency: the player behind the X-Participant-Token header (401 / 403 otherwise)."""
-    return participant_service.get_participant_by_token(db, x_participant_token or "")
+) -> str:
+    """Dependency: the X-Participant-Token header. Look the player up inside run_db."""
+    return x_participant_token or ""
 
 
 def _join_out(membership: GameParticipant) -> JoinOut:
@@ -93,9 +101,11 @@ def create_game(
         422: {"description": "Nickname not allowed."},
     },
 )
-def join_game(join_in: JoinRequest, db: Session = Depends(get_db)) -> JoinOut:
+async def join_game(join_in: JoinRequest, db: Session = Depends(get_db)) -> JoinOut:
     """POST /api/v1/games/join"""
-    return _join_out(participant_service.join_game(db, join_in.pin, join_in.nickname, is_anonymous=join_in.is_anonymous))
+    def join(db: Session) -> JoinOut:
+        return _join_out(participant_service.join_game(db, join_in.pin, join_in.nickname, is_anonymous=join_in.is_anonymous))
+    return await run_db(join, db=db)
 
 
 @router.post(
@@ -110,9 +120,11 @@ def join_game(join_in: JoinRequest, db: Session = Depends(get_db)) -> JoinOut:
         404: {"description": "No game with that PIN."},
     },
 )
-def rejoin_game(rejoin_in: RejoinRequest, db: Session = Depends(get_db)) -> JoinOut:
+async def rejoin_game(rejoin_in: RejoinRequest, db: Session = Depends(get_db)) -> JoinOut:
     """POST /api/v1/games/rejoin"""
-    return _join_out(participant_service.rejoin_game(db, rejoin_in.pin, rejoin_in.token))
+    def rejoin(db: Session) -> JoinOut:
+        return _join_out(participant_service.rejoin_game(db, rejoin_in.pin, rejoin_in.token))
+    return await run_db(rejoin, db=db)
 
 
 _CURRENT_QUESTION_DOCS = dict(
@@ -133,13 +145,16 @@ _CURRENT_QUESTION_DOCS = dict(
 
 @router.get("/{gameId}/questions/current", summary="Current Question", **_CURRENT_QUESTION_DOCS)
 @router.get("/{gameId}/current-question", summary="Current Question (alias)", **_CURRENT_QUESTION_DOCS)
-def get_current_question(
+async def get_current_question(
     gameId: int,
-    player: GameParticipant = Depends(current_player),
+    token: str = Depends(player_token),
     db: Session = Depends(get_db),
 ) -> CurrentQuestionOut:
     """GET /api/v1/games/{gameId}/questions/current (also /current-question)"""
-    return answer_service.current_question(db, gameId, player)
+    def current(db: Session) -> CurrentQuestionOut:
+        player = participant_service.get_participant_by_token(db, token)
+        return answer_service.current_question(db, gameId, player)
+    return await run_db(current, db=db)
 
 
 @router.post(
@@ -156,22 +171,22 @@ def get_current_question(
         422: {"description": "Option is not part of the question."},
     },
 )
-def submit_answer(
+async def submit_answer(
     gameId: int,
     answer_in: AnswerIn,
-    background_tasks: BackgroundTasks,
-    player: GameParticipant = Depends(current_player),
+    token: str = Depends(player_token),
     db: Session = Depends(get_db),
 ) -> AnswerAck:
     """POST /api/v1/games/{gameId}/answers"""
-    ack = answer_service.submit_answer(db, gameId, player, answer_in)
+    received_at = datetime.now(timezone.utc)  # time the answer by arrival, not by when a worker gets to it
+
+    def submit(db: Session) -> AnswerAck:
+        player = participant_service.get_participant_by_token(db, token)
+        return answer_service.submit_answer(db, gameId, player, answer_in, received_at=received_at)
+    ack = await run_db(submit, db=db)
     # Keep the host's "answered" and the projector's "responses" counters live.
-    background_tasks.add_task(_announce_answer_count, gameId, ack.question_id)
+    orchestrator.request_answer_count(gameId, ack.question_id)
     return ack
-
-
-async def _announce_answer_count(game_id: int, question_id: int) -> None:
-    orchestrator.request_answer_count(game_id, question_id)
 
 
 @router.post(
@@ -210,15 +225,17 @@ def score_question(
         404: {"description": "Game not found, or round not in this game's quiz."},
     },
 )
-def get_leaderboard(
+async def get_leaderboard(
     gameId: int,
     limit: int = Query(5, ge=1, le=100, description="How many players to return (default: top 5)."),
     round_id: int | None = Query(None, gt=0, description="Standings for this round only."),
     db: Session = Depends(get_db),
 ) -> LeaderboardOut:
     """GET /api/v1/games/{gameId}/leaderboard"""
-    game = participant_service.get_game_by_id(db, gameId)
-    return leaderboard_service.get_leaderboard(db, game, limit, round_id)
+    def board(db: Session) -> LeaderboardOut:
+        game = participant_service.get_game_by_id(db, gameId)
+        return leaderboard_service.get_leaderboard(db, game, limit, round_id)
+    return await run_db(board, db=db)
 
 
 @router.get(
@@ -232,10 +249,13 @@ def get_leaderboard(
         403: {"description": "Not in this game, or removed."},
     },
 )
-def get_my_stats(
+async def get_my_stats(
     gameId: int,
-    player: GameParticipant = Depends(current_player),
+    token: str = Depends(player_token),
     db: Session = Depends(get_db),
 ) -> MyStatsOut:
     """GET /api/v1/games/{gameId}/me"""
-    return leaderboard_service.my_stats(db, gameId, player)
+    def stats(db: Session) -> MyStatsOut:
+        player = participant_service.get_participant_by_token(db, token)
+        return leaderboard_service.my_stats(db, gameId, player)
+    return await run_db(stats, db=db)
