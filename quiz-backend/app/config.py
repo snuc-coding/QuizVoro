@@ -8,7 +8,7 @@ at startup — the app refuses to boot if something is missing.
 
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
+from pydantic import Field, field_validator
 
 
 class Settings(BaseSettings):
@@ -37,6 +37,11 @@ class Settings(BaseSettings):
 
     # ── Miscellaneous ─────────────────────────────────────────────────────────
     ENVIRONMENT: str = "production"
+    SQL_ECHO: bool = False
+    DB_POOL_SIZE: int = Field(60, ge=1)
+    DB_MAX_OVERFLOW: int = Field(20, ge=0)
+    DB_WORKER_TOKENS: int | None = Field(None, ge=1)
+    DB_POOL_TIMEOUT: float = Field(10.0, gt=0)
 
     model_config = SettingsConfigDict(
         env_file=".env",          # look for .env in the current working directory

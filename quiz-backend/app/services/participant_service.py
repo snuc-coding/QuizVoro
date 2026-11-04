@@ -105,25 +105,8 @@ def join_game(db: Session, pin: str, raw_nickname: str | None = None, is_anonymo
     if game.status == "finished":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This quiz has already ended.")
 
-    # Determine unique anonymous candidate name
-    anon_count = (
-        db.query(GameParticipant.id)
-        .filter(GameParticipant.game_id == game.id)
-        .count()
-    )
-    idx = anon_count + 1
-    candidate_name = f"Anonymous_{idx:02d}"
-    while db.query(GameParticipant.id).filter(GameParticipant.game_id == game.id, GameParticipant.display_name == candidate_name).first() is not None:
-        idx += 1
-        candidate_name = f"Anonymous_{idx:02d}"
-
-    # If is_anonymous is explicitly True or raw_nickname is omitted (None)
-    if is_anonymous is True or raw_nickname is None:
-        display_name = candidate_name
-        key = nickname_key(candidate_name)
-        participant = Participant(nickname=candidate_name)
-        is_anon_flag = True
-    else:
+    anonymous = is_anonymous is True or raw_nickname is None
+    if not anonymous:
         # Caller provided a nickname (empty or not) without is_anonymous=True; validate strictly
         try:
             clean_nick = check_nickname(raw_nickname)
@@ -138,47 +121,54 @@ def join_game(db: Session, pin: str, raw_nickname: str | None = None, is_anonymo
         )
         if taken is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That nickname is taken in this game. Try another.")
-        participant = Participant(nickname=clean_nick)
-        is_anon_flag = False
+    else:
+        clean_nick = None
 
-    db.add(participant)
-    db.flush()
-    membership = GameParticipant(
-        game_id=game.id,
-        participant_id=participant.id,
-        token=secrets.token_urlsafe(24),
-        nickname_key=key,
-        is_active=True,
-        is_anonymous=is_anon_flag,
-        display_name=display_name,
-    )
-    db.add(membership)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        if should_be_anonymous:
-            idx += 1
-            fallback_name = f"Anonymous_{idx:02d}"
-            p = Participant(nickname=fallback_name)
-            db.add(p)
+    # Allocate anonymous names from the Participant primary key, which the
+    # database assigns atomically. Counting memberships made concurrent joiners
+    # all choose the same suffix and retry in lockstep.
+    for _attempt in range(20 if anonymous else 1):
+        if anonymous:
+            participant = Participant(nickname="Anonymous")
+            db.add(participant)
             db.flush()
-            membership = GameParticipant(
-                game_id=game.id,
-                participant_id=p.id,
-                token=secrets.token_urlsafe(24),
-                nickname_key=nickname_key(fallback_name),
-                is_active=True,
-                is_anonymous=True,
-                display_name=fallback_name,
-            )
-            db.add(membership)
-            db.commit()
+            display_name = f"Anonymous_{participant.id:02d}"
+            if _attempt:
+                display_name += f"_{secrets.token_hex(3)}"
+            participant.nickname = display_name
+            key = nickname_key(display_name)
         else:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That nickname is taken in this game. Try another.") from None
+            display_name = clean_nick
+            key = nickname_key(clean_nick)
+            participant = Participant(nickname=clean_nick)
+            db.add(participant)
+            db.flush()
+        membership = GameParticipant(
+            game_id=game.id,
+            participant_id=participant.id,
+            token=secrets.token_urlsafe(24),
+            nickname_key=key,
+            is_active=True,
+            is_anonymous=anonymous,
+            display_name=display_name,
+        )
+        db.add(membership)
+        try:
+            db.commit()
+            db.refresh(membership)
+            return membership
+        except IntegrityError:
+            db.rollback()
+            if not anonymous:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="That nickname is taken in this game. Try another.",
+                ) from None
 
-    db.refresh(membership)
-    return membership
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Could not assign a unique anonymous name. Please try again.",
+    )
 
 
 def get_participant_by_token(db: Session, token: str) -> GameParticipant:

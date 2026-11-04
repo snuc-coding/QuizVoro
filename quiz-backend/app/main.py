@@ -12,15 +12,31 @@ To run:
     uvicorn app.main:app --reload
 """
 
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
+import anyio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
+from app.database import DB_WORKER_TOKENS
 from app.routers import auth, quizzes, rounds, questions, games, game_controls, websocket
 
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Keep synchronous database workers in step with the SQLAlchemy pool."""
+    thread_limiter = anyio.to_thread.current_default_thread_limiter()
+    previous_tokens = thread_limiter.total_tokens
+    thread_limiter.total_tokens = DB_WORKER_TOKENS
+    try:
+        yield
+    finally:
+        thread_limiter.total_tokens = previous_tokens
 
 # Ensure media directory exists before mounting
 media_path = Path(settings.MEDIA_DIR).resolve()
@@ -40,9 +56,17 @@ app = FastAPI(
         "Include it in the `Authorization` header: `Bearer <your_token>`."
     ),
     version="1.0.0",
+    lifespan=lifespan,
     docs_url="/docs",
     openapi_url="/openapi.json",
 )
+
+
+@app.middleware("http")
+async def record_request_arrival(request, call_next):
+    """Capture answer arrival before dependency/database queues can delay it."""
+    request.state.received_at = datetime.now(timezone.utc)
+    return await call_next(request)
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(

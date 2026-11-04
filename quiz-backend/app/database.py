@@ -70,21 +70,24 @@ socket lifetime); use the db_session() context manager around each DB access.
 Connection: PostgreSQL via psycopg (psycopg3).
 ORM: SQLAlchemy 2.x declarative style.
 """
-import os
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 from app.config import get_settings
 
 settings = get_settings()
 
-# Keep pool_size + max_overflow below Postgres max_connections (default 100).
-POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
-MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "30"))
-POOL_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "10"))
+# Keep pool capacity aligned with the AnyIO worker-thread limit and leave room
+# for migrations/administrative connections under PostgreSQL's usual 100 limit.
+POOL_SIZE = settings.DB_POOL_SIZE
+MAX_OVERFLOW = settings.DB_MAX_OVERFLOW
+DB_WORKER_TOKENS = settings.DB_WORKER_TOKENS or (POOL_SIZE + MAX_OVERFLOW)
+POOL_TIMEOUT = settings.DB_POOL_TIMEOUT
+if DB_WORKER_TOKENS > POOL_SIZE + MAX_OVERFLOW:
+    raise ValueError("DB_WORKER_TOKENS must not exceed DB_POOL_SIZE + DB_MAX_OVERFLOW")
 
 # ── Engine ────────────────────────────────────────────────────────────────────
 engine = create_engine(
@@ -94,19 +97,14 @@ engine = create_engine(
     max_overflow=MAX_OVERFLOW,
     pool_timeout=POOL_TIMEOUT,  # fail fast instead of hanging 30s
     pool_recycle=1800,
-    echo=(settings.ENVIRONMENT == "development"),
+    echo=settings.SQL_ECHO,
 )
-
-
-@event.listens_for(engine, "checkout")
-def _log_checkout(dbapi_conn, rec, proxy):
-    print("POOL:", engine.pool.status())
-
 # ── Session factory ───────────────────────────────────────────────────────────
 SessionLocal = sessionmaker(
     bind=engine,
     autocommit=False,
     autoflush=False,
+    expire_on_commit=False,
 )
 
 # ── Declarative base ──────────────────────────────────────────────────────────

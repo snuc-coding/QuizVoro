@@ -20,8 +20,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 import jwt
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app import scoring
 from app.config import get_settings
@@ -65,19 +66,32 @@ def _get_game_lock(game_id: int) -> asyncio.Lock:
 
 
 @asynccontextmanager
-async def _host_action(db: Session, game_id: int):
+async def _host_action(db: Session | None, game_id: int):
     """
-    One host action at a time per game. If the action fails after locking the
-    game row (FOR UPDATE), roll back right here so the row lock is released
-    before the next action or any answer needs it, instead of waiting for the
-    request's session cleanup.
+    One host action at a time per game. Synchronous transaction work is run by
+    _run_db in a worker thread and rolled back before the lock is released.
     """
     async with _get_game_lock(game_id):
+        yield
+
+
+def _run_db(db: Session | None, fn, *args):
+    """Run one complete synchronous DB unit; timer tasks own a short session."""
+    def execute(session: Session):
         try:
-            yield
+            result = fn(session, *args)
+            # End any read transaction opened while building the return payload
+            # before the event loop starts broadcasting it to many sockets.
+            session.commit()
+            return result
         except BaseException:
-            db.rollback()
+            session.rollback()
             raise
+
+    if db is not None:
+        return execute(db)
+    with SessionLocal() as session:
+        return execute(session)
 
 
 def _now() -> datetime:
@@ -176,7 +190,9 @@ class GameOrchestrator:
                 ScoredQuestion.question_id == question.id,
             ).first() is not None
             if scored:
-                revealed_data = answer_service.score_question(db, game, question.id).model_dump(mode="json")
+                revealed_data = answer_service._result(
+                    db, game.id, question, already_scored=True
+                ).model_dump(mode="json")
                 if game.status != "finished":
                     snapshot_status = "reveal"
 
@@ -217,29 +233,32 @@ class GameOrchestrator:
             task.cancel()
 
     @classmethod
-    def _schedule_deadline(cls, db: Session, game: Game, question: Question) -> None:
-        cls._cancel_deadline(game.id)
-        if game.status != "active" or game.current_question_started_at is None:
-            return
-
-        opened_at = scoring.as_utc(game.current_question_started_at)
-        deadline = opened_at + timedelta(seconds=question.time_limit)
-        task = asyncio.create_task(cls._reveal_at_deadline(game.id, question.id, opened_at, deadline))
-        _deadline_tasks[game.id] = task
+    def _schedule_deadline(cls, game_id: int, question_id: int, opened_at: datetime, time_limit: int) -> None:
+        cls._cancel_deadline(game_id)
+        deadline = opened_at + timedelta(seconds=time_limit)
+        task = asyncio.create_task(cls._reveal_at_deadline(game_id, question_id, opened_at, deadline))
+        _deadline_tasks[game_id] = task
 
     @classmethod
-    def ensure_deadline_timer(cls, db: Session, game_id: int) -> None:
+    async def ensure_deadline_timer(cls, game_id: int) -> None:
         """Re-arm an active question timer after a server process restart."""
-        game = participant_service.get_game_by_id(db, game_id)
+        def timer_state(db: Session):
+            game = participant_service.get_game_by_id(db, game_id)
+            if game.status != "active" or not game.current_question_id or game.current_question_started_at is None:
+                return None
+            question = db.get(Question, game.current_question_id)
+            if question is None:
+                return None
+            return game.id, question.id, scoring.as_utc(game.current_question_started_at), question.time_limit
+
+        state = await run_in_threadpool(_run_db, None, timer_state)
         task = _deadline_tasks.get(game_id)
-        if game.status != "active" or not game.current_question_id or game.current_question_started_at is None:
+        if state is None:
             cls._cancel_deadline(game_id)
             return
         if task and not task.done():
             return
-        question = db.get(Question, game.current_question_id)
-        if question is not None:
-            cls._schedule_deadline(db, game, question)
+        cls._schedule_deadline(*state)
 
     @classmethod
     async def _reveal_at_deadline(
@@ -248,7 +267,7 @@ class GameOrchestrator:
         try:
             grace_seconds = scoring.ANSWER_GRACE_MS / 1000
             await asyncio.sleep(max(0.0, (deadline - _now()).total_seconds()) + grace_seconds)
-            with SessionLocal() as db:
+            def current_admin_id(db: Session):
                 game = db.get(Game, game_id)
                 if (
                     game is None
@@ -257,14 +276,18 @@ class GameOrchestrator:
                     or game.current_question_started_at is None
                     or scoring.as_utc(game.current_question_started_at) != opened_at
                 ):
-                    return
+                    return None
 
                 admin = db.get(Admin, game.quiz.admin_id)
                 if admin is None or not admin.is_active:
                     logger.warning("Could not auto-reveal game %s: host admin is unavailable", game_id)
-                    return
+                    return None
+                return admin.id
 
-                await cls.reveal_answer(db, game_id, admin)
+            admin_id = await run_in_threadpool(_run_db, None, current_admin_id)
+            if admin_id is not None:
+                admin_ref = type("AdminRef", (), {"id": admin_id, "is_active": True})()
+                await cls.reveal_answer(None, game_id, admin_ref)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -331,22 +354,28 @@ class GameOrchestrator:
     async def _send_answer_count_soon(cls, game_id: int, question_id: int) -> None:
         try:
             await asyncio.sleep(ANSWER_COUNT_DELAY_S)
-            with SessionLocal() as db:
-                await cls.broadcast_answer_count(db, game_id, question_id)
+            await cls.broadcast_answer_count(game_id, question_id)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Answer count update failed for game %s", game_id)
 
     @classmethod
-    async def broadcast_answer_count(cls, db: Session, game_id: int, question_id: int):
+    async def broadcast_answer_count(cls, game_id: int, question_id: int):
         from app.models import Answer
-        active_count = len(participant_service.active_players(db, game_id))
-        answered_count = (
-            db.query(Answer.id)
-            .filter(Answer.game_id == game_id, Answer.question_id == question_id)
-            .count()
-        )
+
+        def counts(db: Session):
+            active_count = (
+                db.query(GameParticipant.id)
+                .filter(GameParticipant.game_id == game_id, GameParticipant.is_active.is_(True))
+                .count()
+            )
+            answered_count = db.query(Answer.id).filter(
+                Answer.game_id == game_id, Answer.question_id == question_id
+            ).count()
+            return active_count, answered_count
+
+        active_count, answered_count = await run_in_threadpool(_run_db, None, counts)
         msg = WebSocketMessage(
             event=EventType.ANSWER_COUNT_UPDATED.value,
             data=AnswerCountPayload(
@@ -359,328 +388,275 @@ class GameOrchestrator:
         await manager.broadcast_to_role(game_id, "stage", msg)
 
     @classmethod
-    async def start_game(cls, db: Session, game_id: int, admin: Admin) -> Game:
+    async def start_game(cls, db: Session | None, game_id: int, admin: Admin) -> Game:
         """Start the live quiz: transition from lobby to active with Question 1."""
         async with _host_action(db, game_id):
-            game = _lock_game_for_admin(db, game_id, admin)
-            if game.status != "lobby":
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Cannot start game in '{game.status}' status. Must be in 'lobby'.",
+            def work(session: Session):
+                action_admin = session.get(Admin, admin.id)
+                game = _lock_game_for_admin(session, game_id, action_admin)
+                if game.status != "lobby":
+                    raise HTTPException(status_code=409, detail=f"Cannot start game in '{game.status}' status. Must be in 'lobby'.")
+                question_ids = cls.get_quiz_question_ids(session, game.quiz_id)
+                if not question_ids:
+                    raise HTTPException(status_code=409, detail="Add at least one question before starting a game.")
+                question_id = question_ids[0]
+                question = session.get(Question, question_id)
+                opened_at = _now()
+                game.status = "active"
+                game.current_question_id = question_id
+                game.current_question_started_at = opened_at
+                session.commit()
+                session.refresh(game)
+                deadline = opened_at + timedelta(seconds=question.time_limit)
+                payload = QuestionStartPayload(
+                    question=answer_service.participant_question(question),
+                    question_number=1,
+                    total_questions=len(question_ids),
+                    opened_at=opened_at,
+                    deadline=deadline,
+                    server_time=opened_at,
+                    time_limit=question.time_limit,
                 )
+                msg = WebSocketMessage(event=EventType.QUESTION_STARTED.value, data=payload.model_dump(mode="json"))
+                return game, msg, (question_id, opened_at, question.time_limit)
 
-            question_ids = cls.get_quiz_question_ids(db, game.quiz_id)
-            if not question_ids:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Add at least one question before starting a game.",
-                )
-
-            first_qid = question_ids[0]
-            question = db.get(Question, first_qid)
-            now = _now()
-
-            game.status = "active"
-            game.current_question_id = first_qid
-            game.current_question_started_at = now
-            db.commit()
-            db.refresh(game)
-
-            # Build and broadcast sanitized question (NEVER includes is_correct)
-            p_question = answer_service.participant_question(question)
-            deadline = now + timedelta(seconds=question.time_limit)
-
-            q_payload = QuestionStartPayload(
-                question=p_question,
-                question_number=1,
-                total_questions=len(question_ids),
-                opened_at=now,
-                deadline=deadline,
-                server_time=now,
-                time_limit=question.time_limit,
-            )
-            msg = WebSocketMessage(
-                event=EventType.QUESTION_STARTED.value,
-                data=q_payload.model_dump(mode="json"),
-            )
+            game, msg, timer = await run_in_threadpool(_run_db, db, work)
             await manager.broadcast_to_game(game_id, msg)
-            cls._schedule_deadline(db, game, question)
+            cls._schedule_deadline(game_id, *timer)
             return game
 
     @classmethod
-    async def next_question(cls, db: Session, game_id: int, admin: Admin) -> Game:
+    async def next_question(cls, db: Session | None, game_id: int, admin: Admin) -> Game:
         """Advance to the next question in sequence, or finish the game if at the end."""
         async with _host_action(db, game_id):
-            game = _lock_game_for_admin(db, game_id, admin)
-            if game.status not in ("active", "paused"):
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Cannot advance question when game status is '{game.status}'.",
+            def work(session: Session):
+                game = _lock_game_for_admin(session, game_id, session.get(Admin, admin.id))
+                if game.status not in ("active", "paused"):
+                    raise HTTPException(status_code=409, detail=f"Cannot advance question when game status is '{game.status}'.")
+                question_ids = cls.get_quiz_question_ids(session, game.quiz_id)
+                if not game.current_question_id or game.current_question_id not in question_ids:
+                    raise HTTPException(status_code=409, detail="Current question is not set or invalid.")
+                if not session.query(ScoredQuestion.id).filter(
+                    ScoredQuestion.game_id == game.id,
+                    ScoredQuestion.question_id == game.current_question_id,
+                ).first():
+                    raise HTTPException(status_code=409, detail="Reveal and score the current question before advancing.")
+                current_idx = question_ids.index(game.current_question_id)
+                if current_idx + 1 >= len(question_ids):
+                    game.status = "finished"
+                    session.commit()
+                    session.refresh(game)
+                    board = leaderboard_service.get_leaderboard(session, game, limit=10)
+                    msg = WebSocketMessage(
+                        event=EventType.GAME_FINISHED.value,
+                        data={"game_id": game.id, "status": "finished", "leaderboard": board.model_dump(mode="json")},
+                    )
+                    return game, msg, None
+                question_id = question_ids[current_idx + 1]
+                question = session.get(Question, question_id)
+                opened_at = _now()
+                game.status = "active"
+                game.current_question_id = question_id
+                game.current_question_started_at = opened_at
+                session.commit()
+                session.refresh(game)
+                payload = QuestionStartPayload(
+                    question=answer_service.participant_question(question),
+                    question_number=current_idx + 2,
+                    total_questions=len(question_ids),
+                    opened_at=opened_at,
+                    deadline=opened_at + timedelta(seconds=question.time_limit),
+                    server_time=opened_at,
+                    time_limit=question.time_limit,
                 )
+                msg = WebSocketMessage(event=EventType.QUESTION_STARTED.value, data=payload.model_dump(mode="json"))
+                return game, msg, (question_id, opened_at, question.time_limit)
 
-            question_ids = cls.get_quiz_question_ids(db, game.quiz_id)
-            if not game.current_question_id or game.current_question_id not in question_ids:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Current question is not set or invalid.",
-                )
-
-            if not db.query(ScoredQuestion.id).filter(
-                ScoredQuestion.game_id == game.id,
-                ScoredQuestion.question_id == game.current_question_id,
-            ).first():
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Reveal and score the current question before advancing.",
-                )
-
-            current_idx = question_ids.index(game.current_question_id)
+            game, msg, timer = await run_in_threadpool(_run_db, db, work)
             cls._cancel_deadline(game_id)
-            if current_idx + 1 >= len(question_ids):
-                # No more questions -> End game
-                game.status = "finished"
-                db.commit()
-                db.refresh(game)
-                board = leaderboard_service.get_leaderboard(db, game, limit=10)
-                end_msg = WebSocketMessage(
-                    event=EventType.GAME_FINISHED.value,
-                    data={"game_id": game.id, "status": "finished", "leaderboard": board.model_dump(mode="json")},
-                )
-                await manager.broadcast_to_game(game_id, end_msg)
-                return game
-
-            next_qid = question_ids[current_idx + 1]
-            question = db.get(Question, next_qid)
-            now = _now()
-
-            game.status = "active"
-            game.current_question_id = next_qid
-            game.current_question_started_at = now
             _paused_times.pop(game_id, None)
-            db.commit()
-            db.refresh(game)
-
-            p_question = answer_service.participant_question(question)
-            deadline = now + timedelta(seconds=question.time_limit)
-
-            q_payload = QuestionStartPayload(
-                question=p_question,
-                question_number=current_idx + 2,
-                total_questions=len(question_ids),
-                opened_at=now,
-                deadline=deadline,
-                server_time=now,
-                time_limit=question.time_limit,
-            )
-            msg = WebSocketMessage(
-                event=EventType.QUESTION_STARTED.value,
-                data=q_payload.model_dump(mode="json"),
-            )
             await manager.broadcast_to_game(game_id, msg)
-            cls._schedule_deadline(db, game, question)
+            if timer is not None:
+                cls._schedule_deadline(game_id, *timer)
             return game
 
     @classmethod
-    async def pause_game(cls, db: Session, game_id: int, admin: Admin) -> Game:
+    async def pause_game(cls, db: Session | None, game_id: int, admin: Admin) -> Game:
         """Pause the game: halts question countdown and records pause timestamp."""
         async with _host_action(db, game_id):
-            game = _lock_game_for_admin(db, game_id, admin)
-            if game.status != "active":
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Cannot pause game with status '{game.status}'. Must be 'active'.",
-                )
+            def work(session: Session):
+                game = _lock_game_for_admin(session, game_id, session.get(Admin, admin.id))
+                if game.status != "active":
+                    raise HTTPException(status_code=409, detail=f"Cannot pause game with status '{game.status}'. Must be 'active'.")
+                question = session.get(Question, game.current_question_id) if game.current_question_id else None
+                now = _now()
+                remaining = None
+                if question and game.current_question_started_at:
+                    started_at = scoring.as_utc(game.current_question_started_at)
+                    remaining = max(0.0, float(question.time_limit) - (now - started_at).total_seconds())
+                game.status = "paused"
+                session.commit()
+                session.refresh(game)
+                payload = PauseResumePayload(status="paused", remaining_seconds=remaining, deadline=None, server_time=now)
+                msg = WebSocketMessage(event=EventType.GAME_PAUSED.value, data=payload.model_dump(mode="json"))
+                return game, msg, now
 
-            question = db.get(Question, game.current_question_id) if game.current_question_id else None
-            now = _now()
+            game, msg, paused_at = await run_in_threadpool(_run_db, db, work)
             cls._cancel_deadline(game_id)
-            _paused_times[game_id] = now
-            game.status = "paused"
-            db.commit()
-            db.refresh(game)
-
-            remaining_sec = None
-            if question and game.current_question_started_at:
-                started_at = scoring.as_utc(game.current_question_started_at)
-                elapsed = (now - started_at).total_seconds()
-                remaining_sec = max(0.0, float(question.time_limit) - elapsed)
-
-            payload = PauseResumePayload(
-                status="paused",
-                remaining_seconds=remaining_sec,
-                deadline=None,
-                server_time=now,
-            )
-            msg = WebSocketMessage(
-                event=EventType.GAME_PAUSED.value,
-                data=payload.model_dump(mode="json"),
-            )
+            _paused_times[game_id] = paused_at
             await manager.broadcast_to_game(game_id, msg)
             return game
 
     @classmethod
-    async def resume_game(cls, db: Session, game_id: int, admin: Admin) -> Game:
+    async def resume_game(cls, db: Session | None, game_id: int, admin: Admin) -> Game:
         """Resume a paused game: shifts question start forward by paused duration."""
         async with _host_action(db, game_id):
-            game = _lock_game_for_admin(db, game_id, admin)
-            if game.status != "paused":
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Cannot resume game with status '{game.status}'. Must be 'paused'.",
-                )
+            raw_paused_at = _paused_times.get(game_id)
+            def work(session: Session):
+                game = _lock_game_for_admin(session, game_id, session.get(Admin, admin.id))
+                if game.status != "paused":
+                    raise HTTPException(status_code=409, detail=f"Cannot resume game with status '{game.status}'. Must be 'paused'.")
+                now = _now()
+                paused_at = scoring.as_utc(raw_paused_at or game.updated_at or now)
+                if game.current_question_started_at:
+                    game.current_question_started_at = scoring.as_utc(game.current_question_started_at) + (now - paused_at)
+                game.status = "active"
+                session.commit()
+                session.refresh(game)
+                question = session.get(Question, game.current_question_id) if game.current_question_id else None
+                timer = None
+                deadline = remaining = None
+                if question and game.current_question_started_at:
+                    opened_at = scoring.as_utc(game.current_question_started_at)
+                    deadline = opened_at + timedelta(seconds=question.time_limit)
+                    remaining = max(0.0, (deadline - now).total_seconds())
+                    timer = (question.id, opened_at, question.time_limit)
+                payload = PauseResumePayload(status="active", remaining_seconds=remaining, deadline=deadline, server_time=now)
+                msg = WebSocketMessage(event=EventType.GAME_RESUMED.value, data=payload.model_dump(mode="json"))
+                return game, msg, timer
 
-            now = _now()
-            raw_paused_at = _paused_times.pop(game_id, None) or game.updated_at or now
-            paused_at = scoring.as_utc(raw_paused_at)
-
-            # Preserve remaining question time by shifting started_at forward
-            paused_duration = now - paused_at
-            if game.current_question_started_at:
-                started_at = scoring.as_utc(game.current_question_started_at)
-                game.current_question_started_at = started_at + paused_duration
-
-            game.status = "active"
-            db.commit()
-            db.refresh(game)
-
-            question = db.get(Question, game.current_question_id) if game.current_question_id else None
-            deadline = None
-            remaining_sec = None
-            if question and game.current_question_started_at:
-                started_at = scoring.as_utc(game.current_question_started_at)
-                deadline = started_at + timedelta(seconds=question.time_limit)
-                remaining_sec = max(0.0, (deadline - now).total_seconds())
-
-            payload = PauseResumePayload(
-                status="active",
-                remaining_seconds=remaining_sec,
-                deadline=deadline,
-                server_time=now,
-            )
-            msg = WebSocketMessage(
-                event=EventType.GAME_RESUMED.value,
-                data=payload.model_dump(mode="json"),
-            )
+            game, msg, timer = await run_in_threadpool(_run_db, db, work)
+            _paused_times.pop(game_id, None)
             await manager.broadcast_to_game(game_id, msg)
-            if question is not None:
-                cls._schedule_deadline(db, game, question)
+            if timer is not None:
+                cls._schedule_deadline(game_id, *timer)
             return game
 
     @classmethod
-    async def reveal_answer(cls, db: Session, game_id: int, admin: Admin) -> ScoreQuestionOut:
+    async def reveal_answer(cls, db: Session | None, game_id: int, admin: Admin) -> ScoreQuestionOut:
         """Score the question at reveal and broadcast results and updated leaderboard."""
         async with _host_action(db, game_id):
-            game = _lock_game_for_admin(db, game_id, admin)
-            if not game.current_question_id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="No question is currently open to reveal.",
+            def work(session: Session):
+                game = _lock_game_for_admin(session, game_id, session.get(Admin, admin.id))
+                if not game.current_question_id:
+                    raise HTTPException(status_code=409, detail="No question is currently open to reveal.")
+                result = answer_service.score_question(session, game, game.current_question_id)
+                board = leaderboard_service.get_leaderboard(session, game, limit=5)
+                reveal_payload = AnswerRevealPayload(
+                    game_id=game_id,
+                    question_id=game.current_question_id,
+                    correct_option_id=result.correct_option_id,
+                    distribution=result.distribution,
+                    answered=result.answered,
+                    correct=result.correct,
+                    already_scored=result.already_scored,
                 )
+                reveal_msg = WebSocketMessage(
+                    event=EventType.ANSWER_REVEALED.value,
+                    data=reveal_payload.model_dump(mode="json"),
+                )
+                players = participant_service.active_players(session, game_id)
+                all_stats = leaderboard_service.stats_for_all(session, game, players)
+                personal_messages = []
+                for player in players:
+                    stats = all_stats[player.id]
+                    player_name = player.display_name or player.participant.nickname
+                    personal_payload = PlayerPersonalResultPayload(
+                        participant_id=player.id,
+                        nickname=player_name,
+                        display_name=player_name,
+                        is_anonymous=player.is_anonymous,
+                        score=stats.score,
+                        rank=stats.rank,
+                        rank_delta=stats.rank_delta,
+                        streak=stats.streak,
+                        last_result=stats.last_result,
+                    )
+                    msg = WebSocketMessage(
+                        event=EventType.ANSWER_REVEALED.value,
+                        data={**reveal_payload.model_dump(mode="json"), "my_stats": personal_payload.model_dump(mode="json")},
+                    )
+                    personal_messages.append((player.id, msg))
+                board_msg = WebSocketMessage(
+                    event=EventType.LEADERBOARD_UPDATED.value,
+                    data=board.model_dump(mode="json"),
+                )
+                return result, reveal_msg, personal_messages, board_msg
 
-            # Reuses Developer 2's answer_service.score_question (safe to call twice)
-            result = answer_service.score_question(db, game, game.current_question_id)
+            result, reveal_msg, personal_messages, board_msg = await run_in_threadpool(_run_db, db, work)
             cls._cancel_deadline(game_id)
-            board = leaderboard_service.get_leaderboard(db, game, limit=5)
-
-            # 1. Broadcast correct option & distribution to Stage and Host
-            reveal_payload = AnswerRevealPayload(
-                game_id=game_id,
-                question_id=game.current_question_id,
-                correct_option_id=result.correct_option_id,
-                distribution=result.distribution,
-                answered=result.answered,
-                correct=result.correct,
-                already_scored=result.already_scored,
-            )
-            reveal_msg = WebSocketMessage(
-                event=EventType.ANSWER_REVEALED.value,
-                data=reveal_payload.model_dump(mode="json"),
-            )
             await manager.broadcast_to_role(game_id, "host", reveal_msg)
             await manager.broadcast_to_role(game_id, "stage", reveal_msg)
-
-            # 2. Send personalized results to each participant
-            players = participant_service.active_players(db, game_id)
-            all_stats = leaderboard_service.stats_for_all(db, game, players)  # one pass, not one per player
-            for player in players:
-                stats = all_stats[player.id]
-                player_name = player.display_name or player.participant.nickname
-                personal_payload = PlayerPersonalResultPayload(
-                    participant_id=player.id,
-                    nickname=player_name,
-                    display_name=player_name,
-                    is_anonymous=player.is_anonymous,
-                    score=stats.score,
-                    rank=stats.rank,
-                    rank_delta=stats.rank_delta,
-                    streak=stats.streak,
-                    last_result=stats.last_result,
-                )
-                await manager.send_to_participant(
-                    game_id,
-                    player.id,
-                    WebSocketMessage(
-                        event=EventType.ANSWER_REVEALED.value,
-                        data={
-                            **reveal_payload.model_dump(mode="json"),
-                            "my_stats": personal_payload.model_dump(mode="json"),
-                        },
-                    ),
-                )
-
-            # 3. Broadcast updated leaderboard to all
-            board_msg = WebSocketMessage(
-                event=EventType.LEADERBOARD_UPDATED.value,
-                data=board.model_dump(mode="json"),
-            )
+            await asyncio.gather(*(
+                manager.send_to_participant(game_id, participant_id, message)
+                for participant_id, message in personal_messages
+            ))
             await manager.broadcast_to_game(game_id, board_msg)
             return result
 
     @classmethod
-    async def end_game(cls, db: Session, game_id: int, admin: Admin) -> Game:
+    async def end_game(cls, db: Session | None, game_id: int, admin: Admin) -> Game:
         """End the game session manually."""
         async with _host_action(db, game_id):
-            game = _lock_game_for_admin(db, game_id, admin)
-            cls._cancel_deadline(game_id)
-            game.status = "finished"
-            db.commit()
-            db.refresh(game)
+            def work(session: Session):
+                game = _lock_game_for_admin(session, game_id, session.get(Admin, admin.id))
+                game.status = "finished"
+                session.commit()
+                session.refresh(game)
+                board = leaderboard_service.get_leaderboard(session, game, limit=5)
+                msg = WebSocketMessage(
+                    event=EventType.GAME_FINISHED.value,
+                    data={"game_id": game.id, "status": "finished", "leaderboard": board.model_dump(mode="json")},
+                )
+                return game, msg
 
-            board = leaderboard_service.get_leaderboard(db, game, limit=5)
-            msg = WebSocketMessage(
-                event=EventType.GAME_FINISHED.value,
-                data={"game_id": game.id, "status": "finished", "leaderboard": board.model_dump(mode="json")},
-            )
+            game, msg = await run_in_threadpool(_run_db, db, work)
+            cls._cancel_deadline(game_id)
             await manager.broadcast_to_game(game_id, msg)
             return game
 
     @classmethod
     async def kick_participant(
-        cls, db: Session, game_id: int, participant_id: int, admin: Admin
+        cls, db: Session | None, game_id: int, participant_id: int, admin: Admin
     ) -> None:
         """Kick an active player: deactivates in DB and disconnects their sockets."""
         async with _host_action(db, game_id):
-            game = _lock_game_for_admin(db, game_id, admin)
-            membership = (
-                db.query(GameParticipant)
-                .filter(GameParticipant.game_id == game.id, GameParticipant.id == participant_id)
-                .first()
-            )
-            if membership is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Participant with ID {participant_id} not found in this game.",
+            def work(session: Session):
+                game = _lock_game_for_admin(session, game_id, session.get(Admin, admin.id))
+                membership = (
+                    session.query(GameParticipant)
+                    .options(selectinload(GameParticipant.participant))
+                    .filter(GameParticipant.game_id == game.id, GameParticipant.id == participant_id)
+                    .first()
                 )
+                if membership is None:
+                    raise HTTPException(status_code=404, detail=f"Participant with ID {participant_id} not found in this game.")
+                nickname = membership.display_name or membership.participant.nickname
+                is_anonymous = membership.is_anonymous
+                membership.is_active = False
+                session.commit()
+                total_active = session.query(GameParticipant.id).filter(
+                    GameParticipant.game_id == game.id, GameParticipant.is_active.is_(True)
+                ).count()
+                return game.id, membership.id, nickname, is_anonymous, total_active
 
-            membership.is_active = False
-            db.commit()
-
-            # Disconnect WebSockets for this participant
-            await manager.kick_participant(game.id, membership.id, reason="Removed by host")
-
-            # Broadcast updated player count
-            total_active = len(participant_service.active_players(db, game.id))
-            await cls.broadcast_player_left(game.id, membership.id, total_active, membership.participant.nickname)
+            target_game_id, target_id, nickname, is_anonymous, total_active = await run_in_threadpool(
+                _run_db, db, work
+            )
+            await manager.kick_participant(target_game_id, target_id, reason="Removed by host")
+            await cls.broadcast_player_left(
+                target_game_id, target_id, total_active, nickname, is_anonymous=is_anonymous
+            )
 
 
 orchestrator = GameOrchestrator()

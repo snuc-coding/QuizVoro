@@ -132,7 +132,13 @@ def _chosen_option(db: Session, question: Question, answer_in: AnswerIn) -> Opti
     return option
 
 
-def submit_answer(db: Session, game_id: int, player: GameParticipant, answer_in: AnswerIn) -> AnswerAck:
+def submit_answer(
+    db: Session,
+    game_id: int,
+    player: GameParticipant,
+    answer_in: AnswerIn,
+    received_at: datetime | None = None,
+) -> AnswerAck:
     """
     Lock in the player's answer to the open question.
 
@@ -147,13 +153,19 @@ def submit_answer(db: Session, game_id: int, player: GameParticipant, answer_in:
     # success, on rejection, on error), never left for request cleanup: a lock
     # waiting on cleanup is what froze the server under load.
     try:
-        return _submit_locked(db, game_id, player, answer_in)
+        return _submit_locked(db, game_id, player, answer_in, received_at)
     except BaseException:
         db.rollback()
         raise
 
 
-def _submit_locked(db: Session, game_id: int, player: GameParticipant, answer_in: AnswerIn) -> AnswerAck:
+def _submit_locked(
+    db: Session,
+    game_id: int,
+    player: GameParticipant,
+    answer_in: AnswerIn,
+    received_at: datetime | None = None,
+) -> AnswerAck:
     game = (
         db.query(Game)
         .filter(Game.id == game_id)
@@ -165,7 +177,9 @@ def _submit_locked(db: Session, game_id: int, player: GameParticipant, answer_in
     if answer_in.question_id != game.current_question_id:
         raise _conflict("That question is not open.")
 
-    now = _now()
+    # Use the server-side request/message arrival time, captured before any
+    # thread-pool or database-pool queueing, so load does not reduce scores.
+    now = scoring.as_utc(received_at) if received_at is not None else _now()
     opened_at = game.current_question_started_at
     if opened_at is None or now < scoring.as_utc(opened_at):
         raise _conflict("Answers haven't opened yet.")

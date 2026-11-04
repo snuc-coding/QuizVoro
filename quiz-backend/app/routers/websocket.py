@@ -57,6 +57,13 @@ def _auth_host(db, admin_id: int, game_id: int) -> None:
     participant_service.get_game_for_admin(db, game_id, admin)
 
 
+def _get_active_admin(db, admin_id: int) -> Admin:
+    admin = db.get(Admin, admin_id)
+    if not admin or not admin.is_active:
+        raise PermissionError("Admin account disabled or not found")
+    return admin
+
+
 def _auth_participant(db, token: str, game_id: int):
     membership = participant_service.get_participant_by_token(db, token)
     if membership.game_id != game_id or not membership.is_active:
@@ -70,14 +77,21 @@ def _check_stage_game(db, game_id: int) -> None:
 
 
 def _count_active(db, game_id: int) -> int:
-    return len(participant_service.active_players(db, game_id))
+    # This runs once for every participant WebSocket handshake. Loading every
+    # active membership and its Participant relationship here made a 500-player
+    # connection ramp perform O(n²) ORM work before the game even started.
+    return (
+        db.query(GameParticipant.id)
+        .filter(GameParticipant.game_id == game_id, GameParticipant.is_active.is_(True))
+        .count()
+    )
 
 
-def _submit_answer(db, game_id: int, participant_id: int, answer_in: AnswerIn) -> dict:
+def _submit_answer(db, game_id: int, participant_id: int, answer_in: AnswerIn, received_at) -> dict:
     membership = db.get(GameParticipant, participant_id)
     if not membership:
         raise ValueError("Participant membership no longer exists")
-    ack = answer_service.submit_answer(db, game_id, membership, answer_in)
+    ack = answer_service.submit_answer(db, game_id, membership, answer_in, received_at=received_at)
     return ack.model_dump(mode="json")
 
 
@@ -113,8 +127,7 @@ async def host_websocket_endpoint(
     await websocket.accept()
     await manager.connect_host(gameId, websocket)
     try:
-        with SessionLocal() as state_db:
-            orchestrator.ensure_deadline_timer(state_db, gameId)
+        await orchestrator.ensure_deadline_timer(gameId)
     except Exception as exc:
         logger.error("Could not restore timer for host game %s: %s", gameId, exc)
 
@@ -133,39 +146,35 @@ async def host_websocket_endpoint(
 
             action_upper = str(action).upper()
             try:
-                # Orchestrator methods are async and take a session, so the
-                # session must live on the event loop for the duration of the
-                # action only.
-                with SessionLocal() as action_db:
-                    action_admin = action_db.get(Admin, admin_id)
-                    if not action_admin or not action_admin.is_active:
-                        raise ValueError("Admin account disabled or not found")
-                    if action_upper == HostAction.START.value:
-                        await orchestrator.start_game(action_db, gameId, action_admin)
-                    elif action_upper == HostAction.NEXT_QUESTION.value:
-                        await orchestrator.next_question(action_db, gameId, action_admin)
-                    elif action_upper == HostAction.PAUSE.value:
-                        await orchestrator.pause_game(action_db, gameId, action_admin)
-                    elif action_upper == HostAction.RESUME.value:
-                        await orchestrator.resume_game(action_db, gameId, action_admin)
-                    elif action_upper == HostAction.REVEAL.value:
-                        await orchestrator.reveal_answer(action_db, gameId, action_admin)
-                    elif action_upper == HostAction.END.value:
-                        await orchestrator.end_game(action_db, gameId, action_admin)
-                    elif action_upper == HostAction.KICK.value:
-                        participant_id = data.get("participant_id")
-                        if participant_id:
-                            await orchestrator.kick_participant(action_db, gameId, int(participant_id), action_admin)
-                        else:
-                            await websocket.send_json({
-                                "event": EventType.ERROR.value,
-                                "data": {"detail": "participant_id required for KICK action"},
-                            })
+                # Orchestrator methods offload their synchronous transaction
+                # work and return to this loop only to send WebSocket events.
+                action_admin = await _db_call(_get_active_admin, admin_id)
+                if action_upper == HostAction.START.value:
+                    await orchestrator.start_game(None, gameId, action_admin)
+                elif action_upper == HostAction.NEXT_QUESTION.value:
+                    await orchestrator.next_question(None, gameId, action_admin)
+                elif action_upper == HostAction.PAUSE.value:
+                    await orchestrator.pause_game(None, gameId, action_admin)
+                elif action_upper == HostAction.RESUME.value:
+                    await orchestrator.resume_game(None, gameId, action_admin)
+                elif action_upper == HostAction.REVEAL.value:
+                    await orchestrator.reveal_answer(None, gameId, action_admin)
+                elif action_upper == HostAction.END.value:
+                    await orchestrator.end_game(None, gameId, action_admin)
+                elif action_upper == HostAction.KICK.value:
+                    participant_id = data.get("participant_id")
+                    if participant_id:
+                        await orchestrator.kick_participant(None, gameId, int(participant_id), action_admin)
                     else:
                         await websocket.send_json({
                             "event": EventType.ERROR.value,
-                            "data": {"detail": f"Unknown action '{action}'"},
+                            "data": {"detail": "participant_id required for KICK action"},
                         })
+                else:
+                    await websocket.send_json({
+                        "event": EventType.ERROR.value,
+                        "data": {"detail": f"Unknown action '{action}'"},
+                    })
             except Exception as exc:
                 detail = getattr(exc, "detail", str(exc))
                 await websocket.send_json({
@@ -220,12 +229,12 @@ async def participant_websocket_endpoint(
 
             if event == "SUBMIT_ANSWER":
                 try:
+                    received_at = _now()
                     payload = data.get("data", {})
                     answer_in = AnswerIn(**payload)
-                    ack = await _db_call(_submit_answer, gameId, participant_id, answer_in)
+                    ack = await _db_call(_submit_answer, gameId, participant_id, answer_in, received_at)
                     await websocket.send_json({"event": "ANSWER_ACK", "data": ack})
-                    with SessionLocal() as answer_db:
-                        await orchestrator.broadcast_answer_count(answer_db, gameId, answer_in.question_id)
+                    orchestrator.request_answer_count(gameId, answer_in.question_id)
                 except Exception as exc:
                     detail = getattr(exc, "detail", str(exc))
                     await websocket.send_json({
@@ -282,8 +291,7 @@ async def stage_websocket_endpoint(
 
     # Every new/reconnected projector receives a fresh snapshot before live events.
     try:
-        with SessionLocal() as state_db:
-            orchestrator.ensure_deadline_timer(state_db, gameId)
+        await orchestrator.ensure_deadline_timer(gameId)
         state = await _db_call(orchestrator.game_state_snapshot, gameId)
         await websocket.send_json({
             "event": "STAGE_STATE",

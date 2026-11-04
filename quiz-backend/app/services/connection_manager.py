@@ -20,12 +20,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
 
 from app.websocket_schemas import EventType, WebSocketMessage
 
 logger = logging.getLogger("quizvoro.realtime")
+SEND_TIMEOUT_SECONDS = float(os.getenv("WEBSOCKET_SEND_TIMEOUT", "2"))
 
 
 class GameRoom:
@@ -45,6 +47,7 @@ class ConnectionManager:
     def __init__(self):
         self._rooms: dict[int, GameRoom] = {}
         self._lock = asyncio.Lock()
+        self._socket_send_locks: dict[WebSocket, asyncio.Lock] = {}
 
     def _get_or_create_room(self, game_id: int) -> GameRoom:
         if game_id not in self._rooms:
@@ -74,6 +77,7 @@ class ConnectionManager:
             if room and websocket in room.hosts:
                 room.hosts.remove(websocket)
                 self._cleanup_empty_room(game_id)
+            self._socket_send_locks.pop(websocket, None)
         logger.info(f"Host disconnected from game {game_id}")
 
     # ── Participant Connection Lifecycle ──────────────────────────────────────
@@ -94,6 +98,7 @@ class ConnectionManager:
                 if not room.participants[participant_id]:
                     room.participants.pop(participant_id, None)
                 self._cleanup_empty_room(game_id)
+            self._socket_send_locks.pop(websocket, None)
         logger.info(f"Participant {participant_id} disconnected from game {game_id}")
 
     # ── Stage Display Connection Lifecycle ────────────────────────────────────
@@ -110,6 +115,7 @@ class ConnectionManager:
             if room and websocket in room.stages:
                 room.stages.remove(websocket)
                 self._cleanup_empty_room(game_id)
+            self._socket_send_locks.pop(websocket, None)
         logger.info(f"Stage display disconnected from game {game_id}")
 
     # ── Query Helpers ─────────────────────────────────────────────────────────
@@ -125,14 +131,22 @@ class ConnectionManager:
 
     # ── Safe Sending & Broadcasting ───────────────────────────────────────────
 
-    @staticmethod
-    async def _send_safe(websocket: WebSocket, message_dict: dict[str, Any]) -> bool:
+    async def _send_safe(self, websocket: WebSocket, message_dict: dict[str, Any]) -> bool:
         """Safely send JSON message. Returns False if socket is broken."""
         try:
-            await websocket.send_json(message_dict)
+            lock = self._socket_send_locks.setdefault(websocket, asyncio.Lock())
+            async with lock:
+                await asyncio.wait_for(websocket.send_json(message_dict), timeout=SEND_TIMEOUT_SECONDS)
             return True
-        except (WebSocketDisconnect, RuntimeError, Exception):
+        except Exception:
             return False
+
+    @staticmethod
+    async def _close_safe(websocket: WebSocket) -> None:
+        try:
+            await asyncio.wait_for(websocket.close(code=1011, reason="WebSocket send timed out"), timeout=1)
+        except Exception:
+            pass
 
     def _format_message(self, message: dict[str, Any] | WebSocketMessage) -> dict[str, Any]:
         if isinstance(message, WebSocketMessage):
@@ -150,38 +164,42 @@ class ConnectionManager:
         dead_stages: set[WebSocket] = set()
         dead_participants: list[tuple[int, WebSocket]] = []
 
-        # 1. Hosts
-        for ws in list(room.hosts):
-            success = await self._send_safe(ws, payload)
-            if not success:
+        targets = (
+            [("host", None, ws) for ws in list(room.hosts)]
+            + [("stage", None, ws) for ws in list(room.stages)]
+            + [("participant", pid, ws) for pid, sockets in list(room.participants.items()) for ws in list(sockets)]
+        )
+        results = await asyncio.gather(*(self._send_safe(ws, payload) for _, _, ws in targets))
+        for (role, pid, ws), success in zip(targets, results):
+            if success:
+                continue
+            if role == "host":
                 dead_hosts.add(ws)
-
-        # 2. Stage displays
-        for ws in list(room.stages):
-            success = await self._send_safe(ws, payload)
-            if not success:
+            elif role == "stage":
                 dead_stages.add(ws)
-
-        # 3. Participants
-        for pid, sockets in list(room.participants.items()):
-            for ws in list(sockets):
-                success = await self._send_safe(ws, payload)
-                if not success:
-                    dead_participants.append((pid, ws))
+            else:
+                dead_participants.append((pid, ws))
 
         # Cleanup dead sockets
         if dead_hosts or dead_stages or dead_participants:
             async with self._lock:
                 for ws in dead_hosts:
                     room.hosts.discard(ws)
+                    self._socket_send_locks.pop(ws, None)
                 for ws in dead_stages:
                     room.stages.discard(ws)
+                    self._socket_send_locks.pop(ws, None)
                 for pid, ws in dead_participants:
+                    self._socket_send_locks.pop(ws, None)
                     if pid in room.participants:
                         room.participants[pid].discard(ws)
                         if not room.participants[pid]:
                             room.participants.pop(pid, None)
                 self._cleanup_empty_room(game_id)
+            await asyncio.gather(*(
+                self._close_safe(ws)
+                for ws in (*dead_hosts, *dead_stages, *(ws for _, ws in dead_participants))
+            ))
 
     async def broadcast_to_role(
         self, game_id: int, role: str, message: dict[str, Any] | WebSocketMessage
@@ -194,15 +212,29 @@ class ConnectionManager:
         payload = self._format_message(message)
 
         if role == "host":
-            for ws in list(room.hosts):
-                await self._send_safe(ws, payload)
+            targets = [("host", None, ws) for ws in list(room.hosts)]
         elif role == "stage":
-            for ws in list(room.stages):
-                await self._send_safe(ws, payload)
+            targets = [("stage", None, ws) for ws in list(room.stages)]
         elif role == "participant":
-            for pid, sockets in list(room.participants.items()):
-                for ws in list(sockets):
-                    await self._send_safe(ws, payload)
+            targets = [("participant", pid, ws) for pid, sockets in list(room.participants.items()) for ws in list(sockets)]
+        else:
+            return
+        results = await asyncio.gather(*(self._send_safe(ws, payload) for _, _, ws in targets))
+        dead = [(role_name, pid, ws) for (role_name, pid, ws), ok in zip(targets, results) if not ok]
+        if dead:
+            async with self._lock:
+                for role_name, pid, ws in dead:
+                    self._socket_send_locks.pop(ws, None)
+                    if role_name == "host":
+                        room.hosts.discard(ws)
+                    elif role_name == "stage":
+                        room.stages.discard(ws)
+                    elif pid in room.participants:
+                        room.participants[pid].discard(ws)
+                        if not room.participants[pid]:
+                            room.participants.pop(pid, None)
+                self._cleanup_empty_room(game_id)
+            await asyncio.gather(*(self._close_safe(ws) for _, _, ws in dead))
 
     async def send_to_participant(
         self, game_id: int, participant_id: int, message: dict[str, Any] | WebSocketMessage
@@ -214,11 +246,8 @@ class ConnectionManager:
 
         payload = self._format_message(message)
         sockets = list(room.participants[participant_id])
-        any_success = False
-        for ws in sockets:
-            if await self._send_safe(ws, payload):
-                any_success = True
-        return any_success
+        results = await asyncio.gather(*(self._send_safe(ws, payload) for ws in sockets))
+        return any(results)
 
     async def kick_participant(
         self, game_id: int, participant_id: int, reason: str = "Removed by host"
