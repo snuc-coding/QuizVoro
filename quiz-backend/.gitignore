@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Environment files
+.env
+# .env.example is tracked
+
+# Pytest & test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+test.db
+*.sqlite3
+
+# Media uploads (local dev and test media)
+media/
+test_media/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
